@@ -1,7 +1,6 @@
 # 🤖 WhatsApp AI Bot
 
-Bot WhatsApp berbasis **Baileys** dengan integrasi **OpenAI-Compatible AI API** (Qwen).  
-Mendukung sistem plugin, AI Agent mode untuk owner, dan anti-spam delay.
+Bot WhatsApp berbasis **[Baileys](https://github.com/WhiskeySockets/Baileys)** dengan integrasi **OpenAI-Compatible AI API** (Qwen). Mendukung sistem plugin modular, triggered plugin berbasis intent detection, persona AI per user, AI Agent mode untuk owner, dan anti-spam typing delay.
 
 ---
 
@@ -9,35 +8,46 @@ Mendukung sistem plugin, AI Agent mode untuk owner, dan anti-spam delay.
 
 ```
 wa-bot/
-├── index.js                    ← Entry point
-├── .env                        ← Konfigurasi environment
+├── index.js                          ← Entry point
+├── .env                              ← Konfigurasi environment (secrets)
 ├── package.json
+├── README.md
+├── CHANGELOG.md
+├── PLUGIN_SETUP.md
 │
 ├── config/
-│   └── config.js               ← Konfigurasi bot, persona AI, dll
+│   ├── config.js                     ← Konfigurasi utama bot
+│   └── persona.json                  ← Persona AI per user / global (hot-reload)
 │
 ├── core/
-│   ├── bot.js                  ← Koneksi Baileys, QR auth, event listener
-│   ├── pluginLoader.js         ← Auto-load plugin dari /plugins
-│   └── messageHandler.js      ← Router pesan masuk
+│   ├── bot.js                        ← Koneksi Baileys, QR auth, reconnect, init sessions
+│   ├── pluginLoader.js               ← Auto-load semua command plugin dari /plugins
+│   ├── messageHandler.js             ← Router: command → plugin | owner → parallel(intent+AI) | user → AI
+│   └── triggeredPluginHandler.js     ← Load triggered plugin, routing berdasarkan intent JSON
 │
-├── plugins/                    ← ⭐ Tambah plugin baru di sini
-│   ├── help.js                 ← !help / !menu
-│   ├── ai.js                   ← !ai / !ask / !tanya
-│   ├── reset.js                ← !reset — reset session AI
-│   └── agent.js                ← !status, !sessions, dll (owner only)
+├── plugins/                          ← ⭐ Command plugin (dipanggil via prefix !)
+│   ├── help.js                       ← !help / !menu
+│   ├── ai.js                         ← !ai / !ask / !tanya
+│   ├── reset.js                      ← !reset — reset chat session AI
+│   ├── agent.js                      ← !status, !sessions, !clearsessions, !ping (owner only)
+│   ├── persona.js                    ← !persona — manage persona per user (owner only)
+│   │
+│   └── triggered/                    ← ⚡ Triggered plugin (dipanggil via intent detection)
+│       └── sendMessage.js            ← Intent: "sendMessage" — kirim pesan ke nomor lain
 │
 ├── services/
-│   ├── aiService.js            ← Wrapper HTTP ke AI API
-│   └── sessionStore.js         ← Simpan X-Session-ID per JID
+│   ├── aiService.js                  ← HTTP wrapper ke AI API + chat session logic
+│   ├── sessionStore.js               ← In-memory store X-Session-ID chat per JID + TTL
+│   ├── intentSessionService.js       ← Dedicated session store untuk intent detection per sender
+│   └── personaService.js             ← Load/save/hot-reload persona.json
 │
 ├── utils/
-│   ├── delay.js                ← Anti-spam: typing delay per karakter
-│   ├── logger.js               ← Pino logger
-│   └── helpers.js              ← Utilitas umum
+│   ├── delay.js                      ← Anti-spam: typing delay per karakter
+│   ├── logger.js                     ← Pino logger
+│   └── helpers.js                    ← isOwner, parseCommand, jidToNumber, dll
 │
 └── auth/
-    └── session/                ← Data auth Baileys (auto-generated saat scan QR)
+    └── session/                      ← Data auth Baileys (auto-generated saat scan QR)
 ```
 
 ---
@@ -53,110 +63,188 @@ npm install
 ### 2. Konfigurasi `.env`
 
 ```env
-OWNER_NUMBER=6281234567890      # Nomor owner tanpa + atau spasi
+# Nomor owner (tanpa + atau spasi)
+OWNER_NUMBER=628xxxxxxxxxx
+
+# LID owner — isi dari log "sender" saat pertama owner kirim pesan
+# Contoh: jika log menampilkan sender: "225545979723871" → isi 225545979723871
+OWNER_LID=
+
+# Prefix command
 BOT_PREFIX=!
+
+# OpenAI-Compatible API Server
 AI_API_URL=http://108.137.15.61:9000
 AI_MODEL=qwen
-CHAR_DELAY_MS=40                # Delay per karakter (anti-spam)
-MAX_DELAY_MS=4000               # Batas max delay
+
+# Status online saat bot connect (true/false)
+MARK_ONLINE=true
+
+# Auto baca pesan masuk → centang biru (true/false)
+AUTO_READ=true
+
+# Anti-spam: delay per karakter (ms)
+CHAR_DELAY_MS=40
+MAX_DELAY_MS=4000
+
+# Chat session TTL in-memory (ms), default 1 jam
+SESSION_TTL=3600000
+
+# Log level: trace | debug | info | warn | error
+LOG_LEVEL=info
 ```
 
-### 3. Jalankan bot
+### 3. Konfigurasi persona di `config/persona.json`
+
+```json
+{
+  "owner": "Kamu adalah Aria, AI agent pribadi owner. ...",
+  "default": "Kamu adalah Aria, asisten WhatsApp yang ramah. ...",
+  "users": {
+    "628111111111": "Kamu adalah Aria, teman Budi. Panggil dia Budi. ..."
+  }
+}
+```
+
+> ⚠️ Tulis persona dalam **satu baris tanpa newline** — newline menyebabkan server Qwen mengirim prompt terputus-putus.
+
+### 4. Jalankan bot
 
 ```bash
 npm start
 ```
 
-Scan QR yang muncul di terminal dengan WhatsApp.
+Scan QR yang muncul di terminal dengan WhatsApp. Session disimpan otomatis di `auth/session/` — QR hanya perlu scan sekali.
 
 ---
 
-## 🔌 Cara Membuat Plugin Baru
+## 🤖 Alur Kerja Bot
 
-Buat file baru di folder `plugins/`, contoh `plugins/sticker.js`:
-
-```js
-const plugin = {
-  name: 'Sticker',
-  description: 'Buat sticker dari gambar',
-  commands: ['sticker', 'stiker'],   // command yang trigger plugin ini
-  ownerOnly: false,                  // true = hanya owner
-
-  handler: async ({ sock, msg, jid, reply, fullArgs }) => {
-    // Logic kamu di sini
-    await reply('Fitur sticker belum tersedia.');
-  },
-};
-
-export default plugin;
 ```
+Bot start
+    └─ initOwnerIntentSession() → buat intent session owner di Qwen
 
-Plugin otomatis di-load saat bot start. **Tidak perlu register manual.**
-
-### Context object yang tersedia di `handler`:
-
-| Property | Tipe | Keterangan |
-|----------|------|------------|
-| `sock` | object | Baileys socket (untuk sendMessage, dll) |
-| `msg` | object | Raw Baileys message |
-| `jid` | string | Chat JID (nomor/grup) |
-| `sender` | string | Sender JID |
-| `isOwner` | boolean | Apakah sender adalah owner |
-| `text` | string | Teks lengkap pesan |
-| `command` | string | Command yang dipakai (tanpa prefix) |
-| `args` | string[] | Argumen dalam array |
-| `fullArgs` | string | Semua argumen sebagai string |
-| `reply(text)` | function | Kirim reply dengan typing delay |
+Pesan masuk (WA)
+    │
+    ├─ fromMe? → Abaikan
+    ├─ Auto read receipt (centang biru) ← jika AUTO_READ=true
+    ├─ Deteksi owner (isOwner)
+    │
+    ├─ isCommand (prefix "!")?
+    │     ├─ Plugin tidak ditemukan → "❓ Command tidak dikenal"
+    │     ├─ ownerOnly && !isOwner → "🔒 Owner only"
+    │     └─ Execute plugin.handler(ctx)
+    │
+    ├─ isOwner && bukan command?
+    │     └─ Promise.all ─┬─ Intent session → Qwen return JSON { intent, params }
+    │                     └─ Chat session   → Qwen return respons AI
+    │                          │
+    │                          ├─ intent != null → jalankan triggered plugin, buang hasil AI → STOP
+    │                          └─ intent null    → kirim hasil AI ke owner → STOP
+    │
+    └─ Non-owner, bukan command → AI Chat biasa
+          ├─ getPersona(sender) → ambil persona dari persona.json
+          ├─ Session ada? → continue mode (X-Session-ID)
+          └─ Session baru? → system prompt + user message (1 baris)
+```
 
 ---
 
-## 🤖 Alur AI Agent
+## ⚡ Triggered Plugin
 
-```
-Pesan masuk
-    │
-    ├─ isCommand? ──→ Plugin handler
-    │                   ├─ ownerOnly && !isOwner → "🔒 Owner only"
-    │                   └─ Execute plugin
-    │
-    └─ Bukan command ──→ AI Chat
-                          ├─ Owner → ownerPersona (agent mode)
-                          └─ User  → regularPersona (chat biasa)
-```
+Triggered plugin aktif **bukan dari command prefix**, melainkan dari **deteksi intent** pada teks natural owner. Hanya berjalan untuk owner.
+
+**Dual session per owner:**
+
+| Session | Store | Tujuan |
+|---------|-------|--------|
+| Chat session | `sessionStore` | Respons AI percakapan biasa |
+| Intent session | `intentSessionService` | Memantau setiap pesan, return JSON intent |
+
+Kedua request ke Qwen dikirim **secara paralel** (`Promise.all`) — tidak ada latency tambahan.
+
+**Intent session dibuat saat bot start** (`initOwnerIntentSession()`) — Qwen sudah siap memantau sebelum pesan pertama masuk. Session bersifat persisten di Qwen sehingga memiliki memori percakapan lengkap untuk deteksi intent yang lebih akurat.
+
+**Triggered plugin yang tersedia:**
+
+| Intent | File | Contoh kalimat natural |
+|--------|------|------------------------|
+| `sendMessage` | `triggered/sendMessage.js` | "kirimin pesan ke 628xxx bilang besok gua telat" |
+
+**Menambah triggered plugin baru:** lihat [PLUGIN_SETUP.md](./PLUGIN_SETUP.md)
+
+---
+
+## 🎭 Sistem Persona
+
+Persona dikelola di `config/persona.json` dan di-**hot-reload** (perubahan berlaku tanpa restart bot).
+
+**Prioritas lookup:**
+1. `users[nomor]` — persona spesifik untuk nomor tersebut
+2. `users[lid]` — persona spesifik via LID WhatsApp
+3. `owner` — jika sender adalah owner
+4. `default` — fallback untuk semua user
+
+**Manage persona via chat (owner only):**
+
+| Command | Fungsi |
+|---------|--------|
+| `!persona list` | Lihat semua persona |
+| `!persona set 628xxx [teks]` | Set persona untuk nomor |
+| `!persona del 628xxx` | Hapus persona user |
+| `!persona owner [teks]` | Update persona owner |
+| `!persona default [teks]` | Update persona default |
 
 ---
 
 ## 🛡️ Anti-Spam
 
-Setiap pesan yang dikirim bot akan:
+Setiap pesan yang dikirim bot:
 1. Set presence ke `composing` (typing indicator)
-2. Delay selama `length(text) × CHAR_DELAY_MS` ms (max `MAX_DELAY_MS`)
+2. Delay selama `panjang_teks × CHAR_DELAY_MS` ms (max `MAX_DELAY_MS`)
 3. Set presence ke `paused`
 4. Kirim pesan
-
-Ini mensimulasikan manusia mengetik dan sangat mengurangi risiko deteksi bot/spam oleh WhatsApp.
 
 ---
 
 ## 📡 Integrasi AI API
 
-Bot menggunakan endpoint `POST /v1/chat/completions` dari server Qwen di `108.137.15.61:9000`.
+Bot menggunakan `POST /v1/chat/completions` (OpenAI-compatible) di `108.137.15.61:9000`.
 
-- **Session per user**: Setiap nomor WA memiliki `X-Session-ID` tersendiri → konteks percakapan terjaga
-- **Continue mode**: Session otomatis dipakai untuk pesan berikutnya dari user yang sama
-- **Session TTL**: In-memory session di bot expire sesuai `SESSION_TTL` (default 1 jam)
-- **Reset session**: User bisa ketik `!reset` untuk mulai percakapan baru
+**Chat session:**
+- Pesan pertama: system prompt + user message digabung jadi satu `user` message → server buat session → simpan `X-Session-ID`
+- Continue mode: kirim user message saja + header `X-Session-ID`
+- Session expire (404): auto-retry sebagai pesan pertama
+- Reset manual: `!reset`
+
+**Intent session:**
+- Dibuat saat bot start dengan system prompt khusus untuk intent detection
+- Setiap pesan non-command owner dikirim ke session ini
+- Qwen selalu return JSON: `{ "intent": "...", "params": {...} }` atau `{ "intent": null }`
+- Auto-reinit jika session expired
 
 ---
 
-## 📝 Commands
+## 📝 Daftar Commands
 
-| Command | Siapa | Fungsi |
+| Command | Akses | Fungsi |
 |---------|-------|--------|
 | `!help` | Semua | Tampilkan menu |
 | `!ai [teks]` | Semua | Tanya AI langsung |
-| `!reset` | Semua | Reset session AI |
-| `!status` | Owner | Status bot & API |
-| `!sessions` | Owner | Lihat session aktif |
-| `!clearsessions` | Owner | Hapus semua session |
+| `!reset` | Semua | Reset chat session AI |
+| `!status` | Owner | Status bot, AI server, jumlah sessions |
+| `!sessions` | Owner | Lihat chat sessions dan intent sessions |
+| `!clearsessions` | Owner | Hapus semua chat session |
 | `!ping` | Owner | Cek latency AI API |
+| `!persona list` | Owner | Lihat semua persona |
+| `!persona set` | Owner | Set persona per user |
+| `!persona del` | Owner | Hapus persona user |
+| `!persona owner` | Owner | Update persona owner |
+| `!persona default` | Owner | Update persona default |
+
+---
+
+## 📖 Dokumentasi Lanjutan
+
+- [PLUGIN_SETUP.md](./PLUGIN_SETUP.md) — Panduan lengkap membuat command plugin dan triggered plugin
+- [CHANGELOG.md](./CHANGELOG.md) — Riwayat perubahan
