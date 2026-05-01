@@ -1,6 +1,6 @@
 # 🤖 WhatsApp AI Bot
 
-Bot WhatsApp berbasis **[Baileys](https://github.com/WhiskeySockets/Baileys)** dengan integrasi **OpenAI-Compatible AI API** (Qwen). Mendukung sistem plugin modular, triggered plugin berbasis intent detection, persona AI per user, AI Agent mode untuk owner, dan anti-spam typing delay.
+Bot WhatsApp berbasis **[Baileys](https://github.com/WhiskeySockets/Baileys)** dengan integrasi **OpenAI-Compatible AI API** (Qwen). Mendukung sistem plugin modular, triggered plugin berbasis intent detection, persona AI per user, AI Agent mode untuk owner, database JSON, cron scheduler, dan anti-spam typing delay.
 
 ---
 
@@ -20,8 +20,8 @@ wa-bot/
 │   └── persona.json                  ← Persona AI per user / global (hot-reload)
 │
 ├── core/
-│   ├── bot.js                        ← Koneksi Baileys, QR auth, reconnect, init sessions
-│   ├── pluginLoader.js               ← Auto-load semua command plugin dari /plugins
+│   ├── bot.js                        ← Koneksi Baileys, QR auth, reconnect, init sessions, cron start
+│   ├── pluginLoader.js               ← Auto-load command plugin + daftarkan cron job dari plugin
 │   ├── messageHandler.js             ← Router: command → plugin | owner → parallel(intent+AI) | user → AI
 │   └── triggeredPluginHandler.js     ← Load triggered plugin, routing berdasarkan intent JSON
 │
@@ -31,15 +31,21 @@ wa-bot/
 │   ├── reset.js                      ← !reset — reset chat session AI
 │   ├── agent.js                      ← !status, !sessions, !clearsessions, !ping (owner only)
 │   ├── persona.js                    ← !persona — manage persona per user (owner only)
+│   ├── reminder.js                   ← !remind, !reminders, !remindclear — reminder berbasis waktu
 │   │
 │   └── triggered/                    ← ⚡ Triggered plugin (dipanggil via intent detection)
 │       └── sendMessage.js            ← Intent: "sendMessage" — kirim pesan ke nomor lain
 │
 ├── services/
-│   ├── aiService.js                  ← HTTP wrapper ke AI API + chat session logic
+│   ├── aiService.js                  ← HTTP wrapper ke AI API + chat session logic + owner warmup
 │   ├── sessionStore.js               ← In-memory store X-Session-ID chat per JID + TTL
 │   ├── intentSessionService.js       ← Dedicated session store untuk intent detection per sender
-│   └── personaService.js             ← Load/save/hot-reload persona.json
+│   ├── personaService.js             ← Load/save/hot-reload persona.json
+│   ├── db.js                         ← Database JSON berbasis file, collection per file di /data/
+│   └── cronService.js                ← Cron scheduler: cron expression, alias, interval
+│
+├── data/                             ← 🗄️ Data JSON (auto-generated, satu file per collection)
+│   └── reminders.json                ← Contoh collection dari plugin reminder
 │
 ├── utils/
 │   ├── delay.js                      ← Anti-spam: typing delay per karakter
@@ -98,7 +104,7 @@ LOG_LEVEL=info
 
 ```json
 {
-  "owner": "Kamu adalah Aria, AI agent pribadi owner. ...",
+  "owner": "Kamu adalah PAF, AI agent pribadi owner. ...",
   "default": "Kamu adalah Aria, asisten WhatsApp yang ramah. ...",
   "users": {
     "628111111111": "Kamu adalah Aria, teman Budi. Panggil dia Budi. ..."
@@ -122,7 +128,14 @@ Scan QR yang muncul di terminal dengan WhatsApp. Session disimpan otomatis di `a
 
 ```
 Bot start
-    └─ initOwnerIntentSession() → buat intent session owner di Qwen
+    ├─ loadPlugins()             → load semua command plugin + daftarkan cron job ke cronService
+    └─ startBot()
+
+connection.open
+    ├─ Resolve owner LID         (onWhatsApp atau dari .env)
+    ├─ initOwnerIntentSession()  → buat intent session owner di Qwen
+    ├─ warmupOwnerSession()      → kirim persona owner ke Qwen, session AI owner siap
+    └─ cronService.startAll()    → jalankan semua cron job yang terdaftar
 
 Pesan masuk (WA)
     │
@@ -146,6 +159,9 @@ Pesan masuk (WA)
           ├─ getPersona(sender) → ambil persona dari persona.json
           ├─ Session ada? → continue mode (X-Session-ID)
           └─ Session baru? → system prompt + user message (1 baris)
+
+connection.close
+    └─ cronService.stopAll()     → hentikan semua cron job
 ```
 
 ---
@@ -179,6 +195,8 @@ Kedua request ke Qwen dikirim **secara paralel** (`Promise.all`) — tidak ada l
 
 Persona dikelola di `config/persona.json` dan di-**hot-reload** (perubahan berlaku tanpa restart bot).
 
+**Owner persona dikirim saat bot start** — saat koneksi WhatsApp terbuka, bot secara otomatis menginisialisasi session AI owner dengan persona yang sudah dikonfigurasi. Pesan pertama owner langsung masuk dalam konteks yang benar tanpa cold-start.
+
 **Prioritas lookup:**
 1. `users[nomor]` — persona spesifik untuk nomor tersebut
 2. `users[lid]` — persona spesifik via LID WhatsApp
@@ -197,6 +215,54 @@ Persona dikelola di `config/persona.json` dan di-**hot-reload** (perubahan berla
 
 ---
 
+## 🗄️ Database JSON
+
+Bot menyediakan database JSON ringan berbasis file di folder `/data/`. Setiap collection disimpan sebagai file terpisah (`/data/<collection>.json`) dan dapat digunakan oleh plugin manapun.
+
+```js
+import db from '../services/db.js';
+
+// Tulis (async)
+await db.insert('collection', { field: 'value' });
+await db.update('collection', { _id: '...' }, { field: 'new' });
+await db.upsert('collection', { key: 'x' }, { value: 1 });
+await db.delete('collection', { field: 'value' });
+
+// Baca (synchronous)
+db.findOne('collection', { field: 'value' });
+db.find('collection', { status: 'active' });
+db.count('collection', {});
+```
+
+Lihat [PLUGIN_SETUP.md](./PLUGIN_SETUP.md) untuk dokumentasi API lengkap.
+
+---
+
+## 📅 Cron Scheduler
+
+Plugin dapat mendeklarasikan cron job langsung di export default via field `crons`. Job didaftarkan otomatis oleh `pluginLoader` dan dijalankan setelah koneksi WhatsApp terbuka.
+
+```js
+export default {
+  name: 'myPlugin',
+  commands: ['cmd'],
+  crons: [
+    {
+      name: 'myPlugin:dailyTask',
+      expr: '0 9 * * *',       // setiap hari jam 09:00
+      handler: async () => { /* ... */ },
+    },
+  ],
+  handler: async (ctx) => { /* ... */ },
+};
+```
+
+**Alias yang tersedia:** `@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly`, `@every_<N>s`
+
+Lihat [PLUGIN_SETUP.md](./PLUGIN_SETUP.md) untuk format ekspresi lengkap dan contoh.
+
+---
+
 ## 🛡️ Anti-Spam
 
 Setiap pesan yang dikirim bot:
@@ -212,7 +278,8 @@ Setiap pesan yang dikirim bot:
 Bot menggunakan `POST /v1/chat/completions` (OpenAI-compatible) di `108.137.15.61:9000`.
 
 **Chat session:**
-- Pesan pertama: system prompt + user message digabung jadi satu `user` message → server buat session → simpan `X-Session-ID`
+- **Warmup saat start** — persona owner dikirim ke Qwen saat `connection.open`, session siap sebelum pesan pertama
+- Pesan pertama (non-owner / session baru): system prompt + user message digabung → server buat session → simpan `X-Session-ID`
 - Continue mode: kirim user message saja + header `X-Session-ID`
 - Session expire (404): auto-retry sebagai pesan pertama
 - Reset manual: `!reset`
@@ -241,10 +308,13 @@ Bot menggunakan `POST /v1/chat/completions` (OpenAI-compatible) di `108.137.15.6
 | `!persona del` | Owner | Hapus persona user |
 | `!persona owner` | Owner | Update persona owner |
 | `!persona default` | Owner | Update persona default |
+| `!remind <menit> <pesan>` | Owner | Set reminder setelah N menit |
+| `!reminders` | Owner | Lihat semua reminder aktif |
+| `!remindclear` | Owner | Hapus semua reminder aktif |
 
 ---
 
 ## 📖 Dokumentasi Lanjutan
 
-- [PLUGIN_SETUP.md](./PLUGIN_SETUP.md) — Panduan lengkap membuat command plugin dan triggered plugin
+- [PLUGIN_SETUP.md](./PLUGIN_SETUP.md) — Panduan lengkap membuat command plugin, triggered plugin, menggunakan database, dan cron scheduler
 - [CHANGELOG.md](./CHANGELOG.md) — Riwayat perubahan

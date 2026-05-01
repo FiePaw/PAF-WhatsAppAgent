@@ -1,6 +1,6 @@
 # 🧩 PLUGIN SETUP GUIDE — WhatsApp AI Bot (PAF)
 
-Panduan lengkap membuat plugin untuk bot WhatsApp ini, baik **Command Plugin** maupun **Triggered Plugin**.
+Panduan lengkap membuat plugin untuk bot WhatsApp ini: **Command Plugin**, **Triggered Plugin**, serta penggunaan **Database (db)** dan **Cron Scheduler (cronService)** di dalam plugin.
 
 ---
 
@@ -13,6 +13,7 @@ plugins/
 ├── reset.js             ← Command plugin (!reset)
 ├── agent.js             ← Command plugin (!status, !ping, dll)
 ├── persona.js           ← Command plugin (!persona)
+├── reminder.js          ← Command plugin dengan db + cron (!remind)
 │
 └── triggered/           ← Triggered plugin (via intent detection)
     └── sendMessage.js
@@ -24,6 +25,8 @@ Ada **dua jenis plugin**:
 |---|---|---|
 | **Command Plugin** | User ketik `!namaCommand` | `/plugins/*.js` |
 | **Triggered Plugin** | AI mendeteksi intent dari percakapan | `/plugins/triggered/*.js` |
+
+Kedua jenis plugin dapat menggunakan **database JSON** dan **cron scheduler** secara opsional.
 
 ---
 
@@ -47,6 +50,10 @@ export default {
   description: 'Deskripsi singkat plugin ini',
   commands: ['cmd1', 'cmd2'],  // Command yang ditangani (tanpa prefix !)
   ownerOnly: false,            // true → hanya owner yang bisa pakai
+
+  // OPTIONAL — lihat bagian Cron Scheduler untuk detail
+  crons: [],
+
   handler: async (ctx) => {
     // logika plugin di sini
   },
@@ -160,7 +167,7 @@ export default {
     }
 
     // default: !info
-    await reply(`ℹ️ PAF WhatsApp AI Bot\nVersi: 1.0.0`);
+    await reply(`ℹ️ PAF WhatsApp AI Bot`);
   },
 };
 ```
@@ -267,7 +274,6 @@ export default {
       return;
     }
 
-    // Logika simpan reminder...
     await reply(`⏰ Pengingat diset untuk jam ${time}: "${message}"`);
   },
 };
@@ -302,6 +308,220 @@ export default {
 
 ---
 
+## 3️⃣ Database JSON (`db`)
+
+Bot menyediakan database JSON ringan berbasis file. Setiap **collection** disimpan sebagai satu file di folder `/data/<collection>.json`. Database ini dapat digunakan oleh **semua jenis plugin**.
+
+### Import
+
+```js
+// Dari /plugins/namaPlugin.js
+import db from '../services/db.js';
+
+// Dari /plugins/triggered/namaPlugin.js
+import db from '../../services/db.js';
+```
+
+### API Lengkap
+
+#### `db.insert(collection, doc)` — Sisipkan dokumen baru
+```js
+const newDoc = await db.insert('reminders', {
+  jid: '628xxx@s.whatsapp.net',
+  message: 'Cek server',
+  dueAt: Date.now() + 60000,
+  sent: false,
+});
+// newDoc._id dan newDoc.createdAt otomatis diisi
+```
+
+#### `db.findOne(collection, query)` — Cari satu dokumen
+```js
+const reminder = db.findOne('reminders', { _id: '1234_abc' });
+// Mengembalikan object dokumen atau null
+```
+
+#### `db.find(collection, query)` — Cari semua dokumen yang cocok
+```js
+// Cari semua reminder yang belum terkirim
+const pending = db.find('reminders', { sent: false });
+
+// Query kosong → ambil semua dokumen
+const all = db.find('reminders', {});
+```
+
+#### `db.update(collection, query, updates)` — Update dokumen pertama yang cocok
+```js
+await db.update('reminders', { _id: '1234_abc' }, { sent: true });
+// Field updatedAt otomatis diisi
+```
+
+#### `db.upsert(collection, query, doc)` — Update jika ada, insert jika tidak ada
+```js
+await db.upsert('settings', { key: 'autoReply' }, { value: true });
+```
+
+#### `db.delete(collection, query)` — Hapus semua dokumen yang cocok
+```js
+const removed = await db.delete('reminders', { jid, sent: true });
+// Mengembalikan jumlah dokumen yang dihapus
+```
+
+#### `db.clear(collection)` — Hapus seluruh isi collection
+```js
+await db.clear('reminders');
+```
+
+#### `db.count(collection, query)` — Hitung dokumen
+```js
+const total = db.count('reminders', { sent: false });
+```
+
+### Catatan Penting
+
+- `insert`, `update`, `upsert`, `delete`, `clear` adalah `async` — selalu gunakan `await`
+- `findOne`, `find`, `count` adalah **synchronous** (tidak perlu `await`)
+- Nama collection bebas — file JSON dibuat otomatis di `/data/`
+- Query menggunakan **shallow key-value match** (cocokkan nilai exact per field)
+- Query tidak mendukung operator seperti `$gt`, `$lt`, dll — filter lanjutan lakukan manual di JS:
+  ```js
+  const due = db.find('reminders', {}).filter(r => !r.sent && r.dueAt <= Date.now());
+  ```
+
+---
+
+## 4️⃣ Cron Scheduler (`cronService`)
+
+Bot menyediakan scheduler berbasis cron untuk menjalankan tugas terjadwal. Plugin dapat mendaftarkan cron job melalui field `crons` di export default-nya — **tidak perlu memanggil cronService secara manual**.
+
+### Cara Mendaftarkan Cron Job di Plugin
+
+Tambahkan field `crons` (array) ke export default plugin:
+
+```js
+export default {
+  name: 'namaPlugin',
+  commands: ['cmd'],
+  ownerOnly: false,
+
+  crons: [
+    {
+      name: 'namaPlugin:namaJob',   // nama unik, gunakan format "plugin:job"
+      expr: '0 9 * * *',           // cron expression (setiap hari jam 09:00)
+      handler: async () => {
+        // logika yang dijalankan sesuai jadwal
+      },
+      runOnRegister: false,        // optional: jalankan sekali langsung saat bot start
+    },
+  ],
+
+  handler: async (ctx) => { /* ... */ },
+};
+```
+
+`pluginLoader.js` akan mendaftarkan semua job ke `cronService` secara otomatis saat bot start. Job mulai berjalan setelah koneksi WhatsApp terbuka (`connection.open`).
+
+### Format Cron Expression
+
+```
+* * * * *
+│ │ │ │ └── hari dalam seminggu (0–7, 0 dan 7 = Minggu)
+│ │ │ └──── bulan (1–12)
+│ │ └────── tanggal (1–31)
+│ └──────── jam (0–23)
+└────────── menit (0–59)
+```
+
+**Alias yang tersedia:**
+
+| Alias | Setara dengan | Arti |
+|---|---|---|
+| `@hourly` | `0 * * * *` | Setiap jam |
+| `@daily` | `0 0 * * *` | Setiap hari tengah malam |
+| `@weekly` | `0 0 * * 0` | Setiap Minggu tengah malam |
+| `@monthly` | `0 0 1 * *` | Tanggal 1 tiap bulan |
+| `@yearly` | `0 0 1 1 *` | Tanggal 1 Januari |
+| `@every_<N>s` | interval | Setiap N detik, contoh: `@every_30s` |
+
+**Contoh ekspresi:**
+
+```
+* * * * *        → Setiap menit
+*/5 * * * *      → Setiap 5 menit
+0 9 * * *        → Setiap hari jam 09:00
+0 9 * * 1        → Setiap Senin jam 09:00
+0 */2 * * *      → Setiap 2 jam
+@every_60s       → Setiap 60 detik
+@daily           → Setiap hari tengah malam
+```
+
+### Mengakses `cronService` Langsung (Opsional)
+
+Jika perlu mengontrol job secara dinamis dari dalam handler:
+
+```js
+import cronService from '../services/cronService.js';
+
+// Daftarkan job baru secara runtime
+cronService.register('namaJob', '@every_30s', async () => {
+  // logika...
+}, { autoStart: true });
+
+// Start / stop job tertentu
+cronService.start('namaJob');
+cronService.stop('namaJob');
+
+// Lihat semua job
+const jobs = cronService.list();
+// [{ name, expr, running, lastRun, runCount }, ...]
+
+// Hapus job
+cronService.unregister('namaJob');
+```
+
+### Contoh Plugin dengan Cron + Database
+
+```js
+// plugins/dailyReport.js
+import db from '../services/db.js';
+import logger from '../utils/logger.js';
+
+let _sock = null;
+const OWNER_JID = process.env.OWNER_NUMBER + '@s.whatsapp.net';
+
+export default {
+  name: 'dailyReport',
+  description: 'Kirim laporan harian ke owner tiap pagi',
+  commands: ['reportstatus'],
+  ownerOnly: true,
+
+  crons: [
+    {
+      name: 'dailyReport:send',
+      expr: '0 8 * * *',  // setiap hari jam 08:00
+      handler: async () => {
+        if (!_sock) return;
+        const count = db.count('messages', {});
+        await _sock.sendMessage(OWNER_JID, {
+          text: `📊 *Laporan Harian*\nTotal pesan diproses: ${count}`,
+        });
+        logger.info('📊 Daily report terkirim');
+      },
+    },
+  ],
+
+  handler: async ({ sock, reply }) => {
+    _sock = sock;
+    const count = db.count('messages', {});
+    await reply(`📊 Total pesan diproses hari ini: ${count}`);
+  },
+};
+```
+
+> ⚠️ **Pattern `_sock`:** Karena cron job berjalan di luar konteks `ctx`, referensi `sock` perlu disimpan ke variabel modul saat handler pertama kali dipanggil. Lihat contoh di atas dan `plugins/reminder.js`.
+
+---
+
 ## 🔧 Menggunakan Service yang Ada
 
 Kamu bisa import service-service yang sudah tersedia ke dalam plugin:
@@ -310,7 +530,6 @@ Kamu bisa import service-service yang sudah tersedia ke dalam plugin:
 
 ```js
 import { askAI } from '../services/aiService.js';
-// (sesuaikan path relatif dari lokasi plugin)
 
 const response = await askAI({
   jid: sender,           // key sesi per user
@@ -343,9 +562,9 @@ import {
 
 getPersona(senderJid, isOwner);         // ambil persona user
 setPersona(senderJid, 'teks persona');  // set persona spesifik user
-deletePersona(senderJid);              // hapus persona user (kembali ke default)
-setGlobalPersona('default', '...');    // update persona global
-listPersonas();                        // list semua persona
+deletePersona(senderJid);               // hapus persona user (kembali ke default)
+setGlobalPersona('default', '...');     // update persona global
+listPersonas();                         // list semua persona
 ```
 
 ### `intentSessionService.js` — Kelola Intent Session
@@ -356,8 +575,30 @@ import {
   deleteIntentSession,
 } from '../services/intentSessionService.js';
 
-listIntentSessions();           // list semua intent session aktif
-deleteIntentSession(senderJid); // hapus intent session (akan di-reinit otomatis)
+listIntentSessions();            // list semua intent session aktif
+deleteIntentSession(senderJid);  // hapus intent session (akan di-reinit otomatis)
+```
+
+### `db.js` — Database JSON
+
+```js
+import db from '../services/db.js';
+
+await db.insert('collection', { field: 'value' });
+db.find('collection', { field: 'value' });
+await db.update('collection', { _id: '...' }, { field: 'newValue' });
+await db.delete('collection', { field: 'value' });
+```
+
+### `cronService.js` — Scheduler
+
+```js
+import cronService from '../services/cronService.js';
+
+cronService.register('jobName', '* * * * *', async () => { /* ... */ });
+cronService.start('jobName');
+cronService.stop('jobName');
+cronService.list();
 ```
 
 ---
@@ -373,6 +614,7 @@ deleteIntentSession(senderJid); // hapus intent session (akan di-reinit otomatis
 - [ ] `handler` adalah `async function`
 - [ ] Semua balasan menggunakan `await reply(...)` atau `await sock.sendMessage(...)`
 - [ ] Tidak ada try/catch yang menelan error secara diam-diam (log atau re-throw)
+- [ ] Jika ada `crons`, setiap entry memiliki `name` unik (format: `pluginName:jobName`), `expr` valid, dan `handler` async
 
 ### Triggered Plugin
 
@@ -383,6 +625,20 @@ deleteIntentSession(senderJid); // hapus intent session (akan di-reinit otomatis
 - [ ] Intent baru sudah didaftarkan di `INTENT_SYSTEM_PROMPT` dalam `intentSessionService.js`
 - [ ] Selalu validasi `params` sebelum digunakan (Qwen bisa returnkan params kosong)
 - [ ] Handler mengembalikan balasan yang jelas ke owner
+
+### Plugin dengan Database
+
+- [ ] Gunakan nama collection yang deskriptif dan konsisten (contoh: `reminders`, `settings`, `logs`)
+- [ ] Selalu `await` operasi tulis (`insert`, `update`, `upsert`, `delete`, `clear`)
+- [ ] Gunakan `findOne`/`find`/`count` tanpa `await` (synchronous)
+- [ ] Filter kompleks (range, kondisi) dilakukan di JS setelah `find()`
+
+### Plugin dengan Cron
+
+- [ ] Nama job unik secara global — gunakan prefix nama plugin (contoh: `reminder:checkDue`)
+- [ ] Jika cron job butuh `sock`, simpan referensi di variabel modul dari handler
+- [ ] Tangani error di dalam cron handler (error tidak ter-caught otomatis)
+- [ ] Uji cron expression di [crontab.guru](https://crontab.guru) sebelum dipakai
 
 ---
 
@@ -395,22 +651,26 @@ Sesuaikan path relatif berdasarkan lokasi file plugin:
 ```js
 // Dari /plugins/namaPlugin.js
 import { askAI } from '../services/aiService.js';
+import db from '../services/db.js';
+import cronService from '../services/cronService.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
 
 // Dari /plugins/triggered/namaPlugin.js
 import { askAI } from '../../services/aiService.js';
+import db from '../../services/db.js';
+import cronService from '../../services/cronService.js';
 import config from '../../config/config.js';
 import logger from '../../utils/logger.js';
 ```
 
-### Plugin Tidak Perlu Restart
+### Plugin Tidak Perlu Restart untuk Development? Tidak.
 
-`pluginLoader.js` dan `triggeredPluginHandler.js` memuat plugin saat bot **pertama kali start**. Jika kamu menambah atau mengubah plugin, **restart bot** agar perubahan dimuat.
+`pluginLoader.js` memuat plugin saat bot **pertama kali start**. Cron job juga didaftarkan hanya saat start. Jika kamu menambah atau mengubah plugin, **selalu restart bot**.
 
 ### Jangan Throw Error di Handler
 
-Error yang tidak ditangkap di handler akan ditangkap oleh `messageHandler.js`, tapi pesan error generik yang dikirim ke user kurang informatif. Sebaiknya tangani error di dalam handler:
+Error yang tidak ditangkap di handler akan ditangkap oleh `messageHandler.js`, tapi pesan error generik yang dikirim ke user kurang informatif. Tangani error di dalam handler:
 
 ```js
 handler: async ({ reply }) => {
@@ -425,7 +685,7 @@ handler: async ({ reply }) => {
 
 ### `ownerOnly` di Command Plugin
 
-Pengecekan dilakukan **otomatis sebelum handler dipanggil**. Tidak perlu cek `isOwner` di dalam handler untuk keperluan ini. Tapi jika ada logika yang berbeda untuk owner vs non-owner di dalam satu plugin, bisa tetap pakai `isOwner` dari ctx:
+Pengecekan dilakukan **otomatis sebelum handler dipanggil**. Tidak perlu cek `isOwner` di dalam handler untuk keperluan ini. Tapi jika ada logika berbeda untuk owner vs non-owner:
 
 ```js
 handler: async ({ isOwner, reply }) => {
@@ -441,7 +701,7 @@ handler: async ({ isOwner, reply }) => {
 
 ## 📝 Template Plugin Siap Pakai
 
-### Template Command Plugin
+### Template Command Plugin (Minimal)
 
 ```js
 // plugins/namaPlugin.js
@@ -455,16 +715,59 @@ export default {
 
   handler: async ({ sock, msg, jid, sender, isOwner, text, command, args, fullArgs, reply }) => {
     try {
-      // ── Validasi input ────────────────────────────────
       if (!fullArgs) {
         await reply(`❓ Penggunaan: !${command} <argumen>`);
         return;
       }
-
-      // ── Logika utama ──────────────────────────────────
-      // ...
-
+      // logika...
       await reply('✅ Berhasil!');
+    } catch (err) {
+      logger.error({ command, err: err.message }, 'Error di plugin namaPlugin');
+      await reply('⚠️ Terjadi kesalahan. Coba lagi nanti.');
+    }
+  },
+};
+```
+
+### Template Command Plugin (dengan DB + Cron)
+
+```js
+// plugins/namaPlugin.js
+import db from '../services/db.js';
+import logger from '../utils/logger.js';
+
+let _sock = null;
+const COLLECTION = 'namaCollection';
+
+export default {
+  name: 'namaPlugin',
+  description: 'Deskripsi plugin dengan db dan cron',
+  commands: ['cmd'],
+  ownerOnly: false,
+
+  crons: [
+    {
+      name: 'namaPlugin:namaJob',
+      expr: '0 * * * *',  // setiap jam
+      handler: async () => {
+        const items = db.find(COLLECTION, { status: 'pending' });
+        for (const item of items) {
+          // proses item...
+          await db.update(COLLECTION, { _id: item._id }, { status: 'done' });
+        }
+        logger.info({ count: items.length }, '⚙️ Cron namaPlugin selesai');
+      },
+    },
+  ],
+
+  handler: async ({ sock, jid, command, args, fullArgs, reply }) => {
+    _sock = sock; // simpan referensi untuk cron
+
+    try {
+      if (command === 'cmd') {
+        const doc = await db.insert(COLLECTION, { data: fullArgs, status: 'pending' });
+        await reply(`✅ Disimpan dengan ID: ${doc._id}`);
+      }
     } catch (err) {
       logger.error({ command, err: err.message }, 'Error di plugin namaPlugin');
       await reply('⚠️ Terjadi kesalahan. Coba lagi nanti.');
@@ -483,7 +786,6 @@ export default {
   intent: 'namaIntent',
 
   handler: async ({ sock, jid, sender, text, params, reply }) => {
-    // ── Validasi params dari Qwen ─────────────────────
     const { param1, param2 } = params;
 
     if (!param1) {
@@ -492,9 +794,7 @@ export default {
     }
 
     try {
-      // ── Logika utama ────────────────────────────────
-      // ...
-
+      // logika...
       await reply(`✅ Berhasil menjalankan namaIntent.`);
     } catch (err) {
       logger.error({ intent: 'namaIntent', err: err.message }, 'Error di triggered plugin');
@@ -519,4 +819,12 @@ Mau buat triggered plugin (via intent)?
   → Buat file di /plugins/triggered/namaIntent.js
   → Export default { intent, handler }
   → Restart bot
+
+Mau simpan data ke database?
+  → import db from '../services/db.js'
+  → await db.insert / db.find / db.update / db.delete
+
+Mau jadwalkan tugas berkala?
+  → Tambahkan field crons: [{ name, expr, handler }] ke export default plugin
+  → pluginLoader otomatis mendaftarkan dan bot.js otomatis menjalankan saat connect
 ```
