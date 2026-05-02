@@ -5,6 +5,42 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.0] — 2026-05-02
+
+### Added
+- `services/groupService.js` — service baru untuk manajemen grup WhatsApp sebagai channel dua arah (input/output) per plugin. Fitur: buat grup baru via Baileys (`groupCreate`), bot leave dan hapus dari daftar (`groupLeave`), daftarkan grup existing, assign grup ke plugin key dengan role `input`/`output`/`both`/`none`, in-memory cache channel map yang di-rebuild otomatis setiap ada perubahan. API publik: `createGroup`, `deleteGroup`, `registerGroup`, `setGroupChannel`, `listGroups`, `findGroup`, `getGroupChannel`, `getGroupOutput`, `getGroupInput`. Data disimpan di `data/groups.json`.
+- `plugins/group.js` — plugin command owner-only untuk manajemen grup secara interaktif via chat. Sub-commands: `create`, `delete`, `register`, `list`, `info`, `channel`. Fitur khusus: `!group register` yang diketik **di dalam grup** otomatis mendeteksi JID dan nama grup dari metadata (`sock.groupMetadata`) tanpa perlu input manual. `!group info` di dalam grup otomatis menampilkan info grup tersebut.
+
+### Changed
+- `core/messageHandler.js` — refactor besar routing pesan untuk mendukung grup sebagai channel:
+  - **Grup tidak terdaftar:** semua pesan diabaikan kecuali `!group register` dari owner — command ini diteruskan ke plugin agar owner bisa mendaftarkan grup langsung dari dalam grup tanpa perlu JID manual
+  - **Grup terdaftar:** owner bisa melakukan AI chat, command plugin, dan intent detection. Non-owner tetap diabaikan. Command tidak dikenal di grup diam (tidak reply error). Pesan natural owner di grup dengan `input` channel menjalankan intent detection + AI chat paralel; grup tanpa `input` channel hanya AI chat
+  - Semua handler di grup menerima tambahan property `groupChannel` di ctx berisi info channel aktif grup tersebut
+- `PLUGIN_SETUP.md` — diperbarui menyeluruh: tambah section baru **Group Channel System (Section 5)** mencakup konsep role input/output/both, alur routing pesan di grup, API lengkap `groupService.js`, contoh penggunaan output ke grup, contoh plugin sadar konteks grup, tabel commands `!group`, checklist plugin dengan group output, catatan behavior (diam di grup jika command tidak dikenal, cache otomatis), dan template plugin dengan group output. Semua template diperbarui dengan `groupChannel` di ctx.
+
+### Architecture
+Sistem grup bekerja sebagai lapisan channel di atas plugin yang sudah ada:
+- Setiap grup terdaftar bisa di-assign ke satu atau lebih plugin key dengan role berbeda
+- Plugin yang ingin kirim output ke grup cukup import `getGroupOutput('pluginKey')` dan loop hasilnya
+- Plugin yang ingin menerima input dari grup tidak perlu perubahan kode — `messageHandler` otomatis routing ke plugin yang bersangkutan
+- Owner mendaftarkan dan mengatur channel via `!group` command; tidak perlu restart bot — cache diperbarui real-time
+
+### Group Channel Flow
+```
+Grup tidak terdaftar:
+  Owner !group register → bot detect JID+nama otomatis → daftarkan → reply konfirmasi
+  Pesan lain → diabaikan
+
+Grup terdaftar:
+  Non-owner → diabaikan
+  Owner command dikenal → plugin.handler(ctx + groupChannel)
+  Owner command tidak dikenal → diam
+  Owner pesan natural + input channel → intent detection + AI chat paralel
+  Owner pesan natural tanpa input channel → AI chat saja
+```
+
+---
+
 ## [1.9.0] — 2026-05-01
 
 ### Added

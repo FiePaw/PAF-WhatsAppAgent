@@ -1,6 +1,6 @@
 # 🧩 PLUGIN SETUP GUIDE — WhatsApp AI Bot (PAF)
 
-Panduan lengkap membuat plugin untuk bot WhatsApp ini: **Command Plugin**, **Triggered Plugin**, serta penggunaan **Database (db)** dan **Cron Scheduler (cronService)** di dalam plugin.
+Panduan lengkap membuat plugin untuk bot WhatsApp ini: **Command Plugin**, **Triggered Plugin**, serta penggunaan **Database (db)**, **Cron Scheduler (cronService)**, dan **Group Channel System** di dalam plugin.
 
 ---
 
@@ -14,6 +14,7 @@ plugins/
 ├── agent.js             ← Command plugin (!status, !ping, dll)
 ├── persona.js           ← Command plugin (!persona)
 ├── reminder.js          ← Command plugin dengan db + cron (!remind)
+├── group.js             ← Command plugin manajemen grup (!group)
 │
 └── triggered/           ← Triggered plugin (via intent detection)
     └── sendMessage.js
@@ -26,7 +27,7 @@ Ada **dua jenis plugin**:
 | **Command Plugin** | User ketik `!namaCommand` | `/plugins/*.js` |
 | **Triggered Plugin** | AI mendeteksi intent dari percakapan | `/plugins/triggered/*.js` |
 
-Kedua jenis plugin dapat menggunakan **database JSON** dan **cron scheduler** secara opsional.
+Kedua jenis plugin dapat menggunakan **database JSON**, **cron scheduler**, dan **group channel system** secara opsional.
 
 ---
 
@@ -38,6 +39,8 @@ Kedua jenis plugin dapat menggunakan **database JSON** dan **cron scheduler** se
 2. `messageHandler.js` mendeteksi bahwa pesan adalah command
 3. `pluginLoader.js` mencari plugin yang memiliki command `ping` di `Map`
 4. Handler plugin dipanggil dengan `ctx` (context object)
+
+> ⚠️ **Grup terdaftar:** Command dari owner di dalam grup yang terdaftar juga diteruskan ke plugin yang sama. Lihat bagian **Group Channel System** untuk detail.
 
 ### Struktur File
 
@@ -76,6 +79,19 @@ Handler menerima satu parameter `ctx` yang berisi:
 | `args` | string[] | Argumen setelah command, dipisah spasi |
 | `fullArgs` | string | Semua argumen setelah command (string utuh) |
 | `reply` | async fn | Fungsi helper untuk membalas pesan dengan typing delay |
+| `groupChannel` | object\|undefined | Info channel grup — hanya ada jika pesan berasal dari grup terdaftar |
+
+#### Property `groupChannel` (jika ada)
+
+```js
+{
+  input: boolean,    // apakah grup ini adalah input channel
+  output: boolean,   // apakah grup ini adalah output channel
+  plugins: string[], // list plugin key yang di-assign ke grup ini
+  channels: object,  // mapping { pluginKey: 'input'|'output'|'both' }
+  name: string,      // nama grup
+}
+```
 
 ### Fungsi `reply`
 
@@ -144,7 +160,7 @@ export default {
 };
 ```
 
-> ⚠️ **Catatan:** Pengecekan `ownerOnly` dilakukan otomatis oleh `messageHandler.js` **sebelum** handler dipanggil. Kamu tidak perlu cek ulang di dalam handler.
+> ⚠️ **Catatan:** Pengecekan `ownerOnly` dilakukan otomatis oleh `messageHandler.js` **sebelum** handler dipanggil di DM. Di grup terdaftar, semua command hanya bisa digunakan oleh owner — pengecekan sudah dilakukan di level `messageHandler.js`.
 
 ### Contoh: Command dengan Beberapa Sub-Command
 
@@ -199,7 +215,7 @@ handler: async ({ sock, jid, msg, reply }) => {
 
 ### Cara Kerja
 
-1. Owner mengirim pesan **tanpa prefix** (bukan command)
+1. Owner mengirim pesan **tanpa prefix** (bukan command) — di DM maupun di grup terdaftar yang punya `input` channel
 2. `messageHandler.js` menjalankan **dua proses paralel**:
    - Intent detection via `intentSessionService.js` (kirim ke Qwen)
    - AI chat biasa via `aiService.js`
@@ -209,6 +225,7 @@ handler: async ({ sock, jid, msg, reply }) => {
 4. Jika tidak ada intent → hasil AI chat dikirim ke owner
 
 > ⚠️ **Triggered plugin hanya aktif untuk owner.** Non-owner hanya mendapat AI chat biasa.
+> Di grup terdaftar, intent detection hanya berjalan jika grup memiliki role `input` atau `both`.
 
 ### Struktur File
 
@@ -237,6 +254,7 @@ Sama seperti command plugin, **ditambah satu property**:
 | `isOwner` | boolean | Selalu `true` untuk triggered plugin |
 | `text` | string | Teks pesan asli dari owner |
 | `reply` | async fn | Fungsi reply dengan typing delay |
+| `groupChannel` | object\|undefined | Info channel grup — ada jika triggered dari grup terdaftar |
 
 ### Mendaftarkan Intent Baru ke Qwen
 
@@ -522,6 +540,191 @@ export default {
 
 ---
 
+## 5️⃣ Group Channel System (`groupService`)
+
+Bot mendukung sistem **grup sebagai channel dua arah** — input dan output — untuk plugin tertentu. Grup yang terdaftar bisa menjadi sumber perintah (input) sekaligus tujuan output notifikasi dari plugin.
+
+### Konsep
+
+| Role | Arti |
+|---|---|
+| `input` | Owner bisa kirim command atau pesan natural di grup ini → diteruskan ke plugin terkait + AI chat |
+| `output` | Plugin bisa mengirim output/notifikasi ke grup ini |
+| `both` | Keduanya — grup berfungsi sebagai input sekaligus output |
+| `none` | Hapus assignment channel dari grup |
+
+Satu grup bisa di-assign ke **beberapa plugin key** dengan role berbeda. Contoh: grup "Ops" bisa jadi `output` untuk `reminder` dan `both` untuk `broadcast`.
+
+### Alur Pesan di Grup
+
+```
+Pesan masuk dari grup
+    │
+    ├─ Grup tidak terdaftar?
+    │     ├─ Owner ketik !group register → daftarkan grup otomatis
+    │     └─ Pesan lain → diabaikan
+    │
+    └─ Grup terdaftar?
+          ├─ Bukan owner → diabaikan
+          ├─ isCommand?
+          │     ├─ Command dikenal → jalankan plugin (ctx.groupChannel tersedia)
+          │     └─ Command tidak dikenal → diam (tidak reply error)
+          └─ Pesan natural owner
+                ├─ Grup punya input channel → intent detection + AI chat paralel
+                └─ Grup tidak punya input channel → AI chat saja
+```
+
+### Import
+
+```js
+// Dari /plugins/namaPlugin.js
+import {
+  getGroupOutput,
+  getGroupInput,
+  getGroupChannel,
+  findGroup,
+  listGroups,
+  registerGroup,
+  setGroupChannel,
+  createGroup,
+  deleteGroup,
+} from '../services/groupService.js';
+
+// Dari /plugins/triggered/namaPlugin.js
+import { getGroupOutput } from '../../services/groupService.js';
+```
+
+### API Lengkap
+
+#### `getGroupOutput(pluginKey)` — Dapatkan JID grup output untuk plugin
+```js
+// Dipakai plugin untuk mengirim output/notifikasi ke grup
+const groupJids = getGroupOutput('reminder');
+// → ['120363xxx@g.us', '120363yyy@g.us']
+
+for (const groupJid of groupJids) {
+  await sock.sendMessage(groupJid, { text: '⏰ Reminder: Meeting 5 menit lagi!' });
+}
+```
+
+#### `getGroupInput(pluginKey)` — Dapatkan JID grup input untuk plugin
+```js
+// Cek grup mana yang terdaftar sebagai input untuk plugin ini
+const inputGroups = getGroupInput('reminder');
+```
+
+#### `getGroupChannel(groupJid)` — Cek status channel sebuah grup
+```js
+// Dipakai messageHandler — jarang dibutuhkan langsung dari plugin
+const channel = getGroupChannel('120363xxx@g.us');
+// → { input: true, output: false, plugins: ['reminder'], channels: { reminder: 'input' }, name: 'Grup Reminder' }
+// → null jika grup tidak terdaftar
+```
+
+#### `findGroup(groupJid)` — Cari data grup dari DB
+```js
+const group = findGroup('120363xxx@g.us');
+// → { _id, groupJid, name, channels, createdAt } atau null
+```
+
+#### `listGroups()` — Daftar semua grup terdaftar
+```js
+const groups = listGroups();
+// → [{ _id, groupJid, name, channels, createdAt }, ...]
+```
+
+#### `registerGroup(groupJid, groupName)` — Daftarkan grup existing
+```js
+const result = await registerGroup('120363xxx@g.us', 'Grup Reminder');
+// → { success: true } atau { success: false, error: '...' }
+```
+
+#### `setGroupChannel(groupJid, pluginKey, role)` — Set channel plugin pada grup
+```js
+await setGroupChannel('120363xxx@g.us', 'reminder', 'both');
+await setGroupChannel('120363xxx@g.us', 'broadcast', 'output');
+await setGroupChannel('120363xxx@g.us', 'reminder', 'none'); // hapus assignment
+```
+
+#### `createGroup(sock, groupName)` — Buat grup baru via Baileys
+```js
+const result = await createGroup(sock, 'Nama Grup Baru');
+// → { success: true, groupJid: '120363xxx@g.us', name: 'Nama Grup Baru' }
+// → { success: false, error: '...' }
+```
+
+#### `deleteGroup(sock, groupJid)` — Bot leave dan hapus dari daftar
+```js
+const result = await deleteGroup(sock, '120363xxx@g.us');
+// → { success: true } atau { success: false, error: '...' }
+```
+
+### Contoh: Plugin yang Kirim Output ke Grup
+
+```js
+// plugins/reminder.js (contoh penggunaan getGroupOutput)
+import { getGroupOutput } from '../services/groupService.js';
+
+// Di dalam cron handler atau bagian manapun yang perlu kirim notifikasi:
+async function sendReminderNotification(sock, message) {
+  // Kirim ke owner via DM
+  await sock.sendMessage(config.ownerJid, { text: message });
+
+  // Kirim juga ke semua grup yang di-assign sebagai output untuk 'reminder'
+  const outputGroups = getGroupOutput('reminder');
+  for (const groupJid of outputGroups) {
+    await sock.sendMessage(groupJid, { text: message });
+  }
+}
+```
+
+### Contoh: Plugin yang Sadar Konteks Grup
+
+```js
+// plugins/myPlugin.js
+export default {
+  name: 'myPlugin',
+  commands: ['cmd'],
+  ownerOnly: true,
+
+  handler: async ({ jid, args, reply, groupChannel }) => {
+    // Cek apakah perintah datang dari grup atau DM
+    if (groupChannel) {
+      // Perintah dari grup terdaftar
+      await reply(`📍 Perintah diterima dari grup: *${groupChannel.name}*`);
+    } else {
+      // Perintah dari DM
+      await reply('💬 Perintah diterima dari DM');
+    }
+  },
+};
+```
+
+### Commands Manajemen Grup (`!group`)
+
+Plugin `group.js` menyediakan command lengkap untuk owner mengelola grup:
+
+| Command | Keterangan |
+|---|---|
+| `!group create <nama>` | Buat grup baru, owner otomatis dimasukkan |
+| `!group delete <groupJid>` | Bot keluar dan hapus grup dari daftar |
+| `!group register [nama]` | Di dalam grup: daftarkan grup ini otomatis. Dari DM: `!group register <groupJid> <nama>` |
+| `!group list` | Tampilkan semua grup terdaftar beserta channel-nya |
+| `!group info [groupJid]` | Detail grup. Di dalam grup: tanpa args → info grup ini |
+| `!group channel <groupJid> <pluginKey> <role>` | Set channel plugin pada grup |
+
+**Contoh alur register grup baru:**
+```
+1. Owner masuk ke grup yang belum terdaftar
+2. Ketik: !group register
+   → Bot otomatis ambil JID dan nama grup dari metadata
+   → Reply: "✅ Grup ini berhasil didaftarkan!"
+3. Ketik: !group channel 120363xxx@g.us reminder both
+   → Grup ini sekarang jadi input+output untuk plugin reminder
+```
+
+---
+
 ## 🔧 Menggunakan Service yang Ada
 
 Kamu bisa import service-service yang sudah tersedia ke dalam plugin:
@@ -563,6 +766,7 @@ import {
 getPersona(senderJid, isOwner);         // ambil persona user
 setPersona(senderJid, 'teks persona');  // set persona spesifik user
 deletePersona(senderJid);               // hapus persona user (kembali ke default)
+setGlobalPersona('owner', '...');       // update persona owner
 setGlobalPersona('default', '...');     // update persona global
 listPersonas();                         // list semua persona
 ```
@@ -577,6 +781,22 @@ import {
 
 listIntentSessions();            // list semua intent session aktif
 deleteIntentSession(senderJid);  // hapus intent session (akan di-reinit otomatis)
+```
+
+### `groupService.js` — Group Channel System
+
+```js
+import {
+  getGroupOutput,
+  getGroupInput,
+  listGroups,
+  findGroup,
+} from '../services/groupService.js';
+
+getGroupOutput('reminder');   // JID grup yang jadi output untuk 'reminder'
+getGroupInput('reminder');    // JID grup yang jadi input untuk 'reminder'
+listGroups();                 // semua grup terdaftar
+findGroup(groupJid);          // cari satu grup berdasarkan JID
 ```
 
 ### `db.js` — Database JSON
@@ -615,6 +835,7 @@ cronService.list();
 - [ ] Semua balasan menggunakan `await reply(...)` atau `await sock.sendMessage(...)`
 - [ ] Tidak ada try/catch yang menelan error secara diam-diam (log atau re-throw)
 - [ ] Jika ada `crons`, setiap entry memiliki `name` unik (format: `pluginName:jobName`), `expr` valid, dan `handler` async
+- [ ] Jika plugin support grup, gunakan `groupChannel` dari ctx untuk bedakan DM vs grup
 
 ### Triggered Plugin
 
@@ -640,6 +861,13 @@ cronService.list();
 - [ ] Tangani error di dalam cron handler (error tidak ter-caught otomatis)
 - [ ] Uji cron expression di [crontab.guru](https://crontab.guru) sebelum dipakai
 
+### Plugin dengan Group Channel Output
+
+- [ ] Import `getGroupOutput` dari `groupService.js`
+- [ ] Panggil `getGroupOutput('pluginKey')` untuk dapatkan list JID grup tujuan
+- [ ] Loop hasilnya dan kirim via `sock.sendMessage(groupJid, { text: ... })`
+- [ ] Dokumentasikan `pluginKey` yang digunakan agar owner tahu cara set channel via `!group channel`
+
 ---
 
 ## ⚠️ Hal-hal yang Perlu Diperhatikan
@@ -651,6 +879,7 @@ Sesuaikan path relatif berdasarkan lokasi file plugin:
 ```js
 // Dari /plugins/namaPlugin.js
 import { askAI } from '../services/aiService.js';
+import { getGroupOutput } from '../services/groupService.js';
 import db from '../services/db.js';
 import cronService from '../services/cronService.js';
 import config from '../config/config.js';
@@ -658,6 +887,7 @@ import logger from '../utils/logger.js';
 
 // Dari /plugins/triggered/namaPlugin.js
 import { askAI } from '../../services/aiService.js';
+import { getGroupOutput } from '../../services/groupService.js';
 import db from '../../services/db.js';
 import cronService from '../../services/cronService.js';
 import config from '../../config/config.js';
@@ -685,17 +915,15 @@ handler: async ({ reply }) => {
 
 ### `ownerOnly` di Command Plugin
 
-Pengecekan dilakukan **otomatis sebelum handler dipanggil**. Tidak perlu cek `isOwner` di dalam handler untuk keperluan ini. Tapi jika ada logika berbeda untuk owner vs non-owner:
+Pengecekan dilakukan **otomatis sebelum handler dipanggil** (di DM). Di grup terdaftar, semua interaksi sudah dibatasi hanya untuk owner di level `messageHandler.js`. Tidak perlu cek `isOwner` di dalam handler untuk keperluan ini.
 
-```js
-handler: async ({ isOwner, reply }) => {
-  if (isOwner) {
-    await reply('👑 Halo owner!');
-  } else {
-    await reply('👋 Halo user!');
-  }
-},
-```
+### Command di Grup — Diam jika Tidak Dikenal
+
+Berbeda dengan DM yang membalas "command tidak dikenal", di grup yang terdaftar bot **tidak membalas** jika command tidak dikenal. Ini mencegah bot spam di grup.
+
+### Group Channel Cache
+
+`groupService.js` menggunakan in-memory cache yang di-rebuild setiap kali ada perubahan channel. Cache ini otomatis konsisten — tidak perlu restart bot saat mengubah channel via `!group channel`.
 
 ---
 
@@ -713,7 +941,7 @@ export default {
   commands: ['cmd'],
   ownerOnly: false,
 
-  handler: async ({ sock, msg, jid, sender, isOwner, text, command, args, fullArgs, reply }) => {
+  handler: async ({ sock, msg, jid, sender, isOwner, text, command, args, fullArgs, reply, groupChannel }) => {
     try {
       if (!fullArgs) {
         await reply(`❓ Penggunaan: !${command} <argumen>`);
@@ -729,19 +957,21 @@ export default {
 };
 ```
 
-### Template Command Plugin (dengan DB + Cron)
+### Template Command Plugin (dengan DB + Cron + Group Output)
 
 ```js
 // plugins/namaPlugin.js
 import db from '../services/db.js';
+import { getGroupOutput } from '../services/groupService.js';
 import logger from '../utils/logger.js';
 
 let _sock = null;
 const COLLECTION = 'namaCollection';
+const PLUGIN_KEY = 'namaPlugin'; // key yang dipakai untuk !group channel
 
 export default {
   name: 'namaPlugin',
-  description: 'Deskripsi plugin dengan db dan cron',
+  description: 'Deskripsi plugin dengan db, cron, dan group output',
   commands: ['cmd'],
   ownerOnly: false,
 
@@ -750,9 +980,18 @@ export default {
       name: 'namaPlugin:namaJob',
       expr: '0 * * * *',  // setiap jam
       handler: async () => {
+        if (!_sock) return;
         const items = db.find(COLLECTION, { status: 'pending' });
+
         for (const item of items) {
-          // proses item...
+          const message = `📢 Update: ${item.data}`;
+
+          // Kirim ke grup output
+          const outputGroups = getGroupOutput(PLUGIN_KEY);
+          for (const groupJid of outputGroups) {
+            await _sock.sendMessage(groupJid, { text: message });
+          }
+
           await db.update(COLLECTION, { _id: item._id }, { status: 'done' });
         }
         logger.info({ count: items.length }, '⚙️ Cron namaPlugin selesai');
@@ -760,7 +999,7 @@ export default {
     },
   ],
 
-  handler: async ({ sock, jid, command, args, fullArgs, reply }) => {
+  handler: async ({ sock, jid, command, args, fullArgs, reply, groupChannel }) => {
     _sock = sock; // simpan referensi untuk cron
 
     try {
@@ -785,7 +1024,7 @@ import logger from '../../utils/logger.js';
 export default {
   intent: 'namaIntent',
 
-  handler: async ({ sock, jid, sender, text, params, reply }) => {
+  handler: async ({ sock, jid, sender, text, params, reply, groupChannel }) => {
     const { param1, param2 } = params;
 
     if (!param1) {
@@ -827,4 +1066,20 @@ Mau simpan data ke database?
 Mau jadwalkan tugas berkala?
   → Tambahkan field crons: [{ name, expr, handler }] ke export default plugin
   → pluginLoader otomatis mendaftarkan dan bot.js otomatis menjalankan saat connect
+
+Mau kirim output ke grup?
+  → import { getGroupOutput } from '../services/groupService.js'
+  → const jids = getGroupOutput('pluginKey')
+  → for (const jid of jids) await sock.sendMessage(jid, { text: '...' })
+  → Owner set channel via: !group channel <groupJid> <pluginKey> output
+
+Mau terima input dari grup?
+  → Tidak perlu kode tambahan — messageHandler otomatis routing ke plugin
+  → Owner set channel via: !group channel <groupJid> <pluginKey> input
+  → ctx.groupChannel tersedia di handler jika pesan dari grup
+
+Mau daftarkan grup baru?
+  → Masuk ke grup → ketik: !group register
+  → Bot otomatis detect JID dan nama grup
+  → Set channel: !group channel <groupJid> <pluginKey> <role>
 ```
