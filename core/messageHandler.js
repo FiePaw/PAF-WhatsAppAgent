@@ -6,6 +6,7 @@ import { askAI } from '../services/aiService.js';
 import { getPersona } from '../services/personaService.js';
 import { handleTriggeredPlugin } from './triggeredPluginHandler.js';
 import { getGroupChannel } from '../services/groupService.js';
+import { formatForWhatsApp } from '../utils/whatsappFormatter.js';
 import logger from '../utils/logger.js';
 
 /**
@@ -38,9 +39,11 @@ export async function handleMessage(sock, msg, plugins) {
   const isGroup = jid.endsWith('@g.us');
 
   // Helper untuk reply dengan typing delay anti-spam
+  // formatForWhatsApp() otomatis mengonversi markdown → format WhatsApp
   const reply = async (replyText) => {
-    await typingDelay(sock, jid, replyText);
-    await sock.sendMessage(jid, { text: replyText }, { quoted: msg });
+    const formatted = formatForWhatsApp(replyText);
+    await typingDelay(sock, jid, formatted);
+    await sock.sendMessage(jid, { text: formatted }, { quoted: msg });
   };
 
   logger.info(
@@ -49,12 +52,9 @@ export async function handleMessage(sock, msg, plugins) {
   );
 
   // ─── Group Routing ───────────────────────────────────────────────────────
-  // Semua grup terdaftar: owner bisa chat AI, command, dan intent detection.
-  // Grup tidak terdaftar: semua pesan diabaikan.
   if (isGroup) {
     const channel = getGroupChannel(jid);
 
-    // Grup tidak terdaftar → hanya izinkan !group register dari owner
     if (!channel) {
       if (!owner) return;
       if (isCommand(text)) {
@@ -77,15 +77,11 @@ export async function handleMessage(sock, msg, plugins) {
       return;
     }
 
-    // Hanya owner yang bisa berinteraksi di grup terdaftar
     if (!owner) return;
 
-    // ── Command handler di grup ──────────────────────────────────────────
     if (isCommand(text)) {
       const { command, args, fullArgs } = parseCommand(text);
       const plugin = plugins.get(command);
-
-      // Command tidak dikenal → diam saja di grup (tidak reply error)
       if (!plugin) return;
 
       try {
@@ -101,12 +97,10 @@ export async function handleMessage(sock, msg, plugins) {
       return;
     }
 
-    // ── Pesan natural owner di grup → intent detection + AI chat paralel ─
     const groupCtx = { sock, msg, jid, sender, isOwner: owner, text, reply, groupChannel: channel };
     const groupSystemPrompt = getPersona(sender, owner);
 
     const [intentHandled, groupAiReply] = await Promise.all([
-      // Intent detection hanya jika grup punya input channel
       channel.input
         ? handleTriggeredPlugin(groupCtx)
         : Promise.resolve(false),

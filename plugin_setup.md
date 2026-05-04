@@ -229,16 +229,27 @@ handler: async ({ sock, jid, msg, reply }) => {
 
 ### Struktur File
 
+Setiap triggered plugin **wajib** export `intent`, `intentDefinition`, dan `handler`:
+
 ```js
 // plugins/triggered/namaPlugin.js
 export default {
-  intent: 'namaIntent',   // harus cocok dengan intent yang dikembalikan Qwen (case-insensitive)
+  intent: 'namaIntent',         // harus cocok dengan intent yang dikembalikan Qwen (case-insensitive)
+  intentDefinition: `"namaIntent" - deskripsi kapan intent ini aktif. Ekstrak: param1 (tipe, keterangan), param2 (tipe, keterangan).`,
+                                // string ini di-inject otomatis ke system prompt Qwen saat bot start
+
+  // OPTIONAL — metadata untuk log
+  name: 'Nama Plugin',
+  description: 'Deskripsi singkat',
+  ownerOnly: true,
 
   handler: async (ctx) => {
     // logika triggered plugin di sini
   },
 };
 ```
+
+> ⚠️ Plugin tanpa `intentDefinition` tetap bisa di-load dan berjalan, tapi Qwen **tidak akan pernah mengenali intent tersebut** karena tidak masuk ke system prompt. Pastikan selalu mengisi `intentDefinition`.
 
 ### Context Object Triggered Plugin (`ctx`)
 
@@ -256,23 +267,27 @@ Sama seperti command plugin, **ditambah satu property**:
 | `reply` | async fn | Fungsi reply dengan typing delay |
 | `groupChannel` | object\|undefined | Info channel grup — ada jika triggered dari grup terdaftar |
 
-### Mendaftarkan Intent Baru ke Qwen
+### Mendaftarkan Intent ke Qwen
 
-Intent detector di `intentSessionService.js` menggunakan system prompt yang sudah terdefinisi. Untuk menambah intent baru, **edit `INTENT_SYSTEM_PROMPT`** di file tersebut:
+Intent detector di `intentSessionService.js` memiliki **base system prompt** yang mendefinisikan peran dan format output Qwen (selalu JSON, tidak boleh teks biasa). Daftar intent yang Qwen kenali **tidak lagi hardcoded** di sana — melainkan dikumpulkan secara otomatis dari field `intentDefinition` di setiap triggered plugin.
 
-```js
-// Cari baris ini di services/intentSessionService.js
-const INTENT_SYSTEM_PROMPT = `... [1] "sendMessage" - ...`;
-
-// Tambahkan intent baru, contoh:
-// ... [2] "setReminder" - owner ingin membuat pengingat.
-//   Ekstrak: time (string, waktu dalam format HH:MM) dan message (string, isi pengingat).
-```
-
-Format penambahan intent di system prompt:
+**Alur build system prompt saat bot start:**
 
 ```
-[N] "namaIntent" - deskripsi kapan intent ini aktif.
+initOwnerIntentSession()
+  → _buildSystemPrompt()
+      → lazy import getIntentDefinitions() dari triggeredPluginHandler.js
+      → kumpulkan intentDefinition dari semua plugin yang sudah di-load
+      → gabungkan: BASE_PROMPT + daftar intent
+  → kirim ke Qwen → simpan session ID
+```
+
+Artinya: **cukup definisikan `intentDefinition` di plugin itu sendiri** — tidak perlu menyentuh `intentSessionService.js` sama sekali.
+
+Format `intentDefinition` yang baik:
+
+```
+"namaIntent" - deskripsi kapan intent ini aktif.
   Ekstrak: param1 (tipe, keterangan), param2 (tipe, keterangan).
   Kondisi khusus jika ada.
 ```
@@ -283,6 +298,7 @@ Format penambahan intent di system prompt:
 // plugins/triggered/setReminder.js
 export default {
   intent: 'setReminder',
+  intentDefinition: `"setReminder" - owner ingin membuat pengingat pada waktu tertentu. Ekstrak: time (string, format HH:MM) dan message (string, isi pengingat). Intent valid hanya jika waktu eksplisit disebutkan.`,
 
   handler: async ({ params, reply }) => {
     const { time, message } = params;
@@ -303,6 +319,7 @@ export default {
 // plugins/triggered/sendMessage.js
 export default {
   intent: 'sendMessage',
+  intentDefinition: `"sendMessage" - owner ingin mengirim pesan ke nomor WhatsApp lain. Ekstrak: targetNumber (string, angka saja tanpa + atau spasi, format internasional 628xxx) dan message (string, isi pesan yang ingin disampaikan, tulis ulang secara natural orang pertama sesuai maksud owner). Intent ini valid hanya jika nomor target eksplisit disebutkan.`,
 
   handler: async ({ params, sock, reply }) => {
     const { targetNumber, message } = params;
@@ -312,7 +329,7 @@ export default {
       return;
     }
 
-    const targetJid = `${targetNumber}@s.whatsapp.net`;
+    const targetJid = `${targetNumber.replace(/\D/g, '')}@s.whatsapp.net`;
 
     try {
       await sock.sendMessage(targetJid, { text: message });
@@ -777,10 +794,12 @@ listPersonas();                         // list semua persona
 import {
   listIntentSessions,
   deleteIntentSession,
+  resetSystemPromptCache,
 } from '../services/intentSessionService.js';
 
 listIntentSessions();            // list semua intent session aktif
 deleteIntentSession(senderJid);  // hapus intent session (akan di-reinit otomatis)
+resetSystemPromptCache();        // reset cache system prompt (rebuild dari plugin saat reinit)
 ```
 
 ### `groupService.js` — Group Channel System
@@ -841,9 +860,10 @@ cronService.list();
 
 - [ ] File ada di `/plugins/triggered/`
 - [ ] Nama file tidak diawali `_`
-- [ ] File menggunakan `export default { intent, handler }`
-- [ ] `intent` cocok **persis** dengan intent yang ada di `INTENT_SYSTEM_PROMPT` (case-insensitive)
-- [ ] Intent baru sudah didaftarkan di `INTENT_SYSTEM_PROMPT` dalam `intentSessionService.js`
+- [ ] File menggunakan `export default { intent, intentDefinition, handler }`
+- [ ] `intent` cocok **persis** dengan intent yang akan dikembalikan Qwen (case-insensitive)
+- [ ] `intentDefinition` diisi dengan deskripsi jelas: kapan aktif + params apa yang diekstrak
+- [ ] Tidak perlu menyentuh `intentSessionService.js` — sistem otomatis inject `intentDefinition` ke system prompt Qwen
 - [ ] Selalu validasi `params` sebelum digunakan (Qwen bisa returnkan params kosong)
 - [ ] Handler mengembalikan balasan yang jelas ke owner
 
@@ -1023,6 +1043,11 @@ import logger from '../../utils/logger.js';
 
 export default {
   intent: 'namaIntent',
+  intentDefinition: `"namaIntent" - deskripsi kapan intent ini aktif dan apa yang owner maksud. Ekstrak: param1 (tipe, keterangan), param2 (tipe, keterangan). Tambahkan kondisi khusus jika diperlukan.`,
+
+  name: 'Nama Plugin',           // opsional, untuk log
+  description: 'Deskripsi',     // opsional
+  ownerOnly: true,               // opsional
 
   handler: async ({ sock, jid, sender, text, params, reply, groupChannel }) => {
     const { param1, param2 } = params;
@@ -1054,9 +1079,9 @@ Mau buat command plugin (!namaCmd)?
   → Restart bot
 
 Mau buat triggered plugin (via intent)?
-  → Daftarkan intent baru di INTENT_SYSTEM_PROMPT (intentSessionService.js)
   → Buat file di /plugins/triggered/namaIntent.js
-  → Export default { intent, handler }
+  → Export default { intent, intentDefinition, handler }
+  → intentDefinition otomatis di-inject ke system prompt Qwen — tidak perlu edit file core
   → Restart bot
 
 Mau simpan data ke database?

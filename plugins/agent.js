@@ -2,6 +2,7 @@
 // Semua command ini HANYA bisa diakses owner
 import { checkHealth } from '../services/aiService.js';
 import { sessionStore } from '../services/sessionStore.js';
+import { listIntentSessions } from '../services/intentSessionService.js';
 import { formatUptime } from '../utils/helpers.js';
 import config from '../config/config.js';
 
@@ -20,13 +21,15 @@ const plugin = {
       case 'status': {
         const healthy = await checkHealth();
         const uptime = formatUptime(Date.now() - BOT_START);
-        const activeSessions = sessionStore.list().length;
+        const chatSessions = sessionStore.list().length;
+        const intentSessions = listIntentSessions().length;
 
         let text = `📊 *Status Bot*\n\n`;
         text += `🤖 Bot: ✅ Online\n`;
         text += `⏱️ Uptime: ${uptime}\n`;
         text += `🌐 AI Server: ${healthy ? '✅ Online' : '❌ Offline'}\n`;
-        text += `💬 Active Sessions: ${activeSessions}\n`;
+        text += `💬 Chat Sessions: ${chatSessions}\n`;
+        text += `🔍 Intent Sessions: ${intentSessions}\n`;
         text += `🔑 Owner: ${config.ownerNumber}\n`;
         text += `🔧 AI Model: ${config.ai.model}\n`;
         text += `🌍 API URL: ${config.ai.baseUrl}`;
@@ -37,27 +40,41 @@ const plugin = {
 
       // ── !sessions ──────────────────────────────────────────────────────
       case 'sessions': {
-        const list = sessionStore.list();
-        if (list.length === 0) {
+        const chatList = sessionStore.list();
+        const intentList = listIntentSessions();
+
+        if (chatList.length === 0 && intentList.length === 0) {
           await reply('📭 Tidak ada session aktif saat ini.');
           return;
         }
 
-        let text = `📋 *Active Sessions (${list.length})*\n\n`;
-        list.forEach((s, i) => {
-          text += `${i + 1}. \`${s.jid.split('@')[0]}\`\n`;
-          text += `   ID: \`${s.sessionId}\`\n`;
-          text += `   Last: ${s.lastUsed}\n\n`;
-        });
+        let text = '';
 
-        await reply(text);
+        if (chatList.length > 0) {
+          text += `💬 *Chat Sessions (${chatList.length})*\n\n`;
+          chatList.forEach((s, i) => {
+            text += `${i + 1}. \`${s.jid.split('@')[0]}\`\n`;
+            text += `   ID: \`${s.sessionId}\`\n`;
+            text += `   Last: ${s.lastUsed}\n\n`;
+          });
+        }
+
+        if (intentList.length > 0) {
+          text += `🔍 *Intent Sessions (${intentList.length})*\n\n`;
+          intentList.forEach((s, i) => {
+            text += `${i + 1}. \`${s.jid.split('@')[0]}\`\n`;
+            text += `   ID: \`${s.sessionId}\`\n\n`;
+          });
+        }
+
+        await reply(text.trim());
         break;
       }
 
       // ── !clearsessions ─────────────────────────────────────────────────
       case 'clearsessions': {
         sessionStore.clear();
-        await reply('🗑️ Semua session berhasil dihapus.');
+        await reply('🗑️ Semua chat session berhasil dihapus.\n_Intent sessions tidak dihapus — dikelola otomatis oleh bot._');
         break;
       }
 

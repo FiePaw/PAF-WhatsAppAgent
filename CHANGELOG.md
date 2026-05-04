@@ -5,6 +5,59 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.2.0] — 2026-05-04
+
+### Added
+- `core/triggeredPluginHandler.js` — export baru `getIntentDefinitions()`: mengumpulkan field `intentDefinition` dari semua triggered plugin yang sudah di-load dan mengembalikannya sebagai array `{ intent, definition }`. Dipanggil oleh `intentSessionService` saat build system prompt.
+- `services/intentSessionService.js` — fungsi baru `resetSystemPromptCache()`: memaksa system prompt di-rebuild ulang dari plugin saat intent session berikutnya di-init. Berguna jika ada perubahan plugin tanpa restart penuh.
+- `plugins/triggered/*.js` — field baru **`intentDefinition`** (string) pada setiap triggered plugin. Field ini berisi deskripsi intent yang akan di-inject ke system prompt Qwen secara otomatis. Plugin tanpa field ini tetap berjalan tapi intent-nya tidak akan dikenali Qwen (warning di log).
+
+### Changed
+- `services/intentSessionService.js` — `INTENT_SYSTEM_PROMPT` yang hardcoded dihapus. Diganti dengan dua komponen: `BASE_PROMPT` (mendefinisikan peran dan format output Qwen — tidak berubah per plugin) dan `_buildSystemPrompt()` yang lazy-import `getIntentDefinitions()` dari `triggeredPluginHandler.js`, lalu menggabungkan `BASE_PROMPT` + daftar intent dari semua plugin. System prompt di-cache setelah pertama kali di-build dan dipakai ulang untuk semua session berikutnya.
+- `core/triggeredPluginHandler.js` — saat load plugin, sekarang juga memvalidasi keberadaan `intentDefinition`. Plugin tanpa field ini mendapat warning di log agar developer sadar intent-nya tidak akan masuk ke Qwen.
+- `plugins/triggered/sendMessage.js` — ditambah field `intentDefinition` dengan deskripsi lengkap (kapan intent aktif, params yang diekstrak, kondisi khusus). Definisi intent yang sebelumnya hardcoded di `intentSessionService.js` kini pindah ke sini.
+- `PLUGIN_SETUP.md` — diperbarui menyeluruh: section "Mendaftarkan Intent ke Qwen" diganti dengan penjelasan sistem baru (base prompt + agregasi otomatis dari plugin), field `intentDefinition` ditambahkan ke struktur file, semua contoh plugin dan template diperbarui, checklist diperbarui (hapus item "edit `INTENT_SYSTEM_PROMPT` manual"), bagian service `intentSessionService` ditambah export `resetSystemPromptCache`.
+
+### Architecture
+Sebelumnya: daftar intent hardcoded di satu konstanta `INTENT_SYSTEM_PROMPT` dalam `intentSessionService.js`. Menambah intent baru berarti harus edit dua file: file plugin dan file service core.
+
+Sekarang: setiap triggered plugin mendefinisikan `intentDefinition`-nya sendiri. `triggeredPluginHandler.js` mengagregasi semua definisi via `getIntentDefinitions()`, dan `intentSessionService.js` mengambilnya via lazy import saat build system prompt. **Menambah triggered plugin baru tidak lagi membutuhkan perubahan pada file core apapun.**
+
+```
+Bot start → initOwnerIntentSession()
+  → _buildSystemPrompt()
+      → lazy import getIntentDefinitions() dari triggeredPluginHandler
+      → kumpulkan intentDefinition dari semua plugin yang sudah di-load
+      → BASE_PROMPT + daftar intent teragregasi
+  → kirim ke Qwen → simpan session ID
+```
+
+Lazy import digunakan untuk menghindari circular dependency: `triggeredPluginHandler` sudah import `intentSessionService`, sehingga `intentSessionService` tidak boleh import `triggeredPluginHandler` di top-level.
+
+---
+
+## [2.1.0] — 2026-05-02
+
+### Added
+- `services/groupService.js` — tambah field `persona` pada schema DB dan cache. Fungsi baru: `setGroupPersona(groupJid, persona)` untuk simpan/hapus persona per grup, `getGroupPersona(groupJid)` untuk ambil dari cache (return `null` jika belum diset), `listGroupsWithPersona()` untuk enumerate semua grup yang punya persona (dipakai warmup saat bot start).
+- `plugins/group.js` — tambah sub-command `!group persona`: set persona grup (diketik di dalam grup), hapus persona (`clear`), lihat persona aktif (tanpa args), dan mode DM (`!group persona <groupJid> <teks>`). `resetSession` dipanggil otomatis setiap kali persona diubah agar langsung aktif. `!group list` dan `!group info` kini menampilkan persona aktif tiap grup.
+
+### Changed
+- `core/bot.js` — setelah warmup owner session, ambil semua grup yang punya persona via `listGroupsWithPersona()` lalu warmup session AI masing-masing secara paralel (`Promise.allSettled`). Session key pakai `groupJid` agar terpisah dari session DM owner. Gagal warmup di satu grup tidak menghentikan yang lain.
+- `core/messageHandler.js` — session key untuk AI chat di grup diubah dari `sender` (JID owner) menjadi `jid` (JID grup). Setiap grup kini punya session AI sendiri, konteks percakapan tidak bercampur antar grup atau dengan DM. Persona grup diambil via `getGroupPersona(jid)`, fallback ke persona owner jika grup belum punya persona.
+
+### Behavior
+- Sebelumnya: owner chat di grup mana pun memakai satu session AI yang sama (session DM owner), persona owner selalu dipakai
+- Sekarang: setiap grup punya session AI sendiri dengan persona khusus yang bisa dikonfigurasi per grup. Jika grup belum punya persona → fallback ke persona owner secara transparan
+
+### Architecture
+Setiap grup terdaftar kini memiliki tiga lapisan konfigurasi yang independen:
+- **Channel** — routing plugin input/output
+- **Persona** — konteks AI khusus grup
+- **Session AI** — konteks percakapan terpisah per grup (key = groupJid)
+
+---
+
 ## [2.0.0] — 2026-05-02
 
 ### Added
