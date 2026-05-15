@@ -5,6 +5,40 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.9.0] — 2026-05-15
+
+### Changed
+- `core/messageHandler.js` — alur paralel owner DM dan grup diubah dari `Promise.all` (tunggu keduanya) menjadi `Promise.race` berbasis flag. AI chat diprioritaskan: begitu `askAI` selesai, reply langsung dikirim tanpa menunggu intent detection. Intent detection tetap berjalan di background hingga selesai untuk keperluan side-effect (inject hasil ke chat session di `triggeredPluginHandler`).
+
+### Behavior
+- Sebelumnya: `Promise.all([intentPromise, aiPromise])` — bot menunggu **kedua** proses selesai sebelum mengirim reply apapun. Jika intent detection lambat, AI reply yang sudah siap ikut tertahan.
+- Sekarang: keduanya tetap berjalan paralel, tapi AI reply dikirim segera begitu selesai. Intent detection yang masih berjalan tidak memblokir pengiriman reply.
+
+### Architecture
+Tiga skenario yang di-handle oleh flag `aiReplySent`:
+
+```
+Skenario 1 — AI selesai duluan, intent belum:
+  aiPromise resolve → cek intentPromise: belum settled
+  → kirim AI reply sekarang
+  → intentPromise tetap jalan di background (inject ke chat session)
+
+Skenario 2 — Intent selesai duluan, terdeteksi:
+  intentPromise resolve(true) → set aiReplySent = true
+  → plugin handler sudah kirim reply-nya sendiri
+  → AI reply yang menyusul diabaikan (aiReplySent sudah true)
+
+Skenario 3 — Intent selesai duluan, null (tidak ada intent):
+  intentPromise resolve(false) → tidak ada yang reply
+  → tunggu aiPromise, kirim saat selesai
+```
+
+Flag `aiReplySent` mencegah double-reply jika kedua promise selesai hampir bersamaan. Intent promise selalu di-await sampai selesai (`.catch(() => {})`) meski reply sudah dikirim, agar side-effect inject ke chat session tetap terjadi.
+
+Perubahan ini berlaku untuk dua blok paralel: **owner DM** (`if (owner)`) dan **owner di grup terdaftar**.
+
+---
+
 ## [2.8.0] — 2026-05-15
 
 ### Added

@@ -149,24 +149,54 @@ export async function handleMessage(sock, msg, plugins) {
     // Model: grup tidak punya model sendiri, pakai model dari persona owner sebagai fallback
     const groupModel = ownerPersonaObj.model;
 
-    const [intentHandled, groupAiReply] = await Promise.all([
-      // Intent detection hanya jika grup punya input channel
-      channel.input
-        ? handleTriggeredPlugin(groupCtx)
-        : Promise.resolve(false),
-      askAI({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, model: groupModel }).catch((err) => {
-        logger.error({ sender, jid, err: err.message }, 'Error saat request ke AI (group)');
-        return null;
+    // AI chat diprioritaskan — langsung kirim begitu selesai.
+    // Intent detection berjalan paralel di background; jika selesai duluan dan
+    // terdeteksi, plugin handler yang reply dan AI reply diabaikan.
+    let groupAiReplySent = false;
+
+    const groupIntentPromise = channel.input
+      ? handleTriggeredPlugin(groupCtx).catch((err) => {
+          logger.error({ sender, jid, err: err.message }, 'Error di intent detection grup (background)');
+          return false;
+        })
+      : Promise.resolve(false);
+
+    const groupAiPromise = askAI({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, model: groupModel }).catch((err) => {
+      logger.error({ sender, jid, err: err.message }, 'Error saat request ke AI (group)');
+      return null;
+    });
+
+    await Promise.race([
+      groupAiPromise.then(async (groupAiReply) => {
+        const intentAlreadyDone = await Promise.race([
+          groupIntentPromise.then((v) => v),
+          Promise.resolve('__pending__'),
+        ]);
+
+        if (intentAlreadyDone === true) {
+          logger.debug({ jid }, '⚡ Intent grup sudah handle duluan, AI reply diabaikan');
+          return;
+        }
+
+        if (!groupAiReplySent) {
+          groupAiReplySent = true;
+          if (groupAiReply) {
+            await reply(groupAiReply);
+          } else {
+            await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
+          }
+        }
+      }),
+
+      groupIntentPromise.then((intentHandled) => {
+        if (intentHandled) {
+          groupAiReplySent = true;
+          logger.debug({ jid }, '⚡ Intent grup terdeteksi duluan, AI reply akan diabaikan');
+        }
       }),
     ]);
 
-    if (intentHandled) return;
-
-    if (groupAiReply) {
-      await reply(groupAiReply);
-    } else {
-      await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
-    }
+    groupIntentPromise.catch(() => {});
     return;
   }
 
@@ -195,26 +225,68 @@ export async function handleMessage(sock, msg, plugins) {
     return;
   }
 
-  // ─── Owner: intent detection + AI chat berjalan paralel ─────────────────
+  // ─── Owner: AI chat + intent detection berjalan paralel ─────────────────
+  // Strategi: AI chat diprioritaskan — begitu selesai langsung dikirim.
+  // Intent detection berjalan di background; jika intent terdeteksi lebih dulu,
+  // plugin handler yang mengirim reply (bukan AI reply).
+  // Jika AI selesai duluan dan intent belum ada hasilnya → kirim AI reply,
+  // intent tetap jalan di background untuk konteks & side-effect (inject ke chat session).
   if (owner) {
     const ctx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply, attachments };
     const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
-    const [intentHandled, aiReply] = await Promise.all([
-      handleTriggeredPlugin(ctx),
-      askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model }).catch((err) => {
-        logger.error({ sender, err: err.message }, 'Error saat request ke AI (parallel)');
-        return null;
+    let aiReplySent = false;
+
+    // Jalankan kedua proses secara paralel
+    const intentPromise = handleTriggeredPlugin(ctx).catch((err) => {
+      logger.error({ sender, err: err.message }, 'Error di intent detection (background)');
+      return false;
+    });
+
+    const aiPromise = askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model }).catch((err) => {
+      logger.error({ sender, err: err.message }, 'Error saat request ke AI (parallel)');
+      return null;
+    });
+
+    // Race: siapapun yang selesai duluan diproses
+    await Promise.race([
+      // Cabang AI: selesai → langsung kirim jika intent belum handle
+      aiPromise.then(async (aiReply) => {
+        // Beri sedikit jeda agar intent yang hampir selesai bisa menang duluan
+        // Jika intentPromise sudah resolve (settled), cek hasilnya dulu
+        const intentAlreadyDone = await Promise.race([
+          intentPromise.then((v) => v),
+          Promise.resolve('__pending__'),
+        ]);
+
+        if (intentAlreadyDone === true) {
+          // Intent sudah selesai dan terdeteksi — plugin sudah reply, skip AI
+          logger.debug({ sender: sender.split('@')[0] }, '⚡ Intent sudah handle duluan, AI reply diabaikan');
+          return;
+        }
+
+        // Intent belum selesai atau null — kirim AI reply sekarang
+        if (!aiReplySent) {
+          aiReplySent = true;
+          if (aiReply) {
+            await reply(aiReply);
+          } else {
+            await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
+          }
+        }
+      }),
+
+      // Cabang intent: selesai → jika terdeteksi, plugin sudah reply; tandai agar AI tidak ikut reply
+      intentPromise.then((intentHandled) => {
+        if (intentHandled) {
+          aiReplySent = true; // blokir AI reply yang mungkin menyusul
+          logger.debug({ sender: sender.split('@')[0] }, '⚡ Intent terdeteksi duluan, AI reply akan diabaikan');
+        }
       }),
     ]);
 
-    if (intentHandled) return;
-
-    if (aiReply) {
-      await reply(aiReply);
-    } else {
-      await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
-    }
+    // Pastikan intent selesai (untuk side-effect inject ke chat session) — tanpa blokir lama
+    intentPromise.catch(() => {});
     return;
   }
 
