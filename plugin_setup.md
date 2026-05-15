@@ -1,6 +1,6 @@
 # 🧩 PLUGIN SETUP GUIDE — WhatsApp AI Bot (PAF)
 
-Panduan lengkap membuat plugin untuk bot WhatsApp ini: **Command Plugin**, **Triggered Plugin**, serta penggunaan **Database (db)**, **Cron Scheduler (cronService)**, dan **Group Channel System** di dalam plugin.
+Panduan lengkap membuat plugin untuk bot WhatsApp ini: **Command Plugin**, **Triggered Plugin**, **Scheduled Plugin**, serta penggunaan **Database (db)**, **Cron Scheduler (cronService)**, dan **Group Channel System** di dalam plugin.
 
 ---
 
@@ -16,18 +16,22 @@ plugins/
 ├── reminder.js          ← Command plugin dengan db + cron (!remind)
 ├── group.js             ← Command plugin manajemen grup (!group)
 │
-└── triggered/           ← Triggered plugin (via intent detection)
-    └── sendMessage.js
+├── triggered/           ← Triggered plugin (via intent detection)
+│   └── sendMessage.js
+│
+└── scheduled/           ← Scheduled plugin (berjalan otomatis via cron)
+    └── economicNews.js
 ```
 
-Ada **dua jenis plugin**:
+Ada **tiga jenis plugin**:
 
 | Jenis | Cara Aktif | Lokasi |
 |---|---|---|
 | **Command Plugin** | User ketik `!namaCommand` | `/plugins/*.js` |
 | **Triggered Plugin** | AI mendeteksi intent dari percakapan | `/plugins/triggered/*.js` |
+| **Scheduled Plugin** | Otomatis berdasarkan jadwal (cron) | `/plugins/scheduled/*.js` |
 
-Kedua jenis plugin dapat menggunakan **database JSON**, **cron scheduler**, dan **group channel system** secara opsional.
+Semua jenis plugin dapat menggunakan **database JSON**, **group channel system** secara opsional. Command dan Triggered plugin juga bisa menggunakan **cron scheduler** via field `crons`.
 
 ---
 
@@ -79,6 +83,7 @@ Handler menerima satu parameter `ctx` yang berisi:
 | `args` | string[] | Argumen setelah command, dipisah spasi |
 | `fullArgs` | string | Semua argumen setelah command (string utuh) |
 | `reply` | async fn | Fungsi helper untuk membalas pesan dengan typing delay |
+| `attachments` | Array\|null | Attachment gambar jika pesan berisi gambar, null jika tidak ada |
 | `groupChannel` | object\|undefined | Info channel grup — hanya ada jika pesan berasal dari grup terdaftar |
 
 #### Property `groupChannel` (jika ada)
@@ -215,24 +220,42 @@ handler: async ({ sock, jid, msg, reply }) => {
 
 ### Cara Kerja
 
-1. Owner mengirim pesan **tanpa prefix** (bukan command) — di DM maupun di grup terdaftar yang punya `input` channel
-2. `messageHandler.js` menjalankan **dua proses paralel**:
-   - Intent detection via `intentSessionService.js` (kirim ke Qwen)
-   - AI chat biasa via `aiService.js`
-3. Jika Qwen mendeteksi intent (return JSON `{ intent: "...", params: {...} }`):
+1. Owner mengirim pesan **tanpa prefix** (teks atau gambar, dengan/tanpa caption) — di DM maupun di grup terdaftar yang punya `input` channel
+2. `messageHandler.js` mengekstrak teks dan gambar (jika ada):
+   - Gambar di-download, dikonversi ke base64, dan dikemas sebagai `attachments`
+   - Jika gambar tanpa caption, `intentText` = `"[gambar dikirim]"` agar intent session tetap punya konteks
+3. `messageHandler.js` menjalankan **dua proses paralel**:
+   - Intent detection via `intentSessionService.js` (kirim teks + gambar ke Qwen)
+   - AI chat biasa via `aiService.js` (kirim teks + gambar ke Qwen)
+4. Jika Qwen mendeteksi intent (return JSON `{ intent: "...", params: {...} }`):
    - Triggered plugin yang sesuai dijalankan
-   - Hasil AI chat **dibuang** (tidak dikirim)
-4. Jika tidak ada intent → hasil AI chat dikirim ke owner
+   - Reply dari plugin di-intercept → dikirim ke **chat session** sebagai konteks sistem (fire & forget) — agar chat session memahami hasil eksekusi plugin, mencegah missed context
+   - Hasil AI chat **dibuang** (tidak dikirim ke owner)
+5. Jika tidak ada intent → hasil AI chat dikirim ke owner
 
-> ⚠️ **Triggered plugin hanya aktif untuk owner.** Non-owner hanya mendapat AI chat biasa.
+> ⚠️ **Triggered plugin hanya aktif untuk owner.** Non-owner hanya mendapat AI chat biasa (dengan gambar jika ada).
 > Di grup terdaftar, intent detection hanya berjalan jika grup memiliki role `input` atau `both`.
 
 ### Struktur File
 
+Setiap triggered plugin **wajib** export `intent`, `intentDefinition`, dan `handler`. Field `groupContextPrompt` bersifat opsional tapi **sangat direkomendasikan** jika plugin akan digunakan sebagai channel input grup:
+
 ```js
 // plugins/triggered/namaPlugin.js
 export default {
-  intent: 'namaIntent',   // harus cocok dengan intent yang dikembalikan Qwen (case-insensitive)
+  intent: 'namaIntent',         // harus cocok dengan intent yang dikembalikan Qwen (case-insensitive)
+
+  intentDefinition: `"namaIntent" - deskripsi kapan intent ini aktif. Ekstrak: param1 (tipe, keterangan), param2 (tipe, keterangan).`,
+  // ↑ di-inject otomatis ke system prompt intent session Qwen saat bot start
+
+  groupContextPrompt: `Teks persona yang akan otomatis menjadi persona grup saat plugin ini di-assign sebagai channel input/both.`,
+  // ↑ otomatis disimpan ke DB sebagai persona grup saat !group channel <groupJid> namaIntent input/both
+  // ↑ jika tidak diisi, persona grup tidak berubah saat plugin di-assign
+
+  // OPTIONAL — metadata untuk log
+  name: 'Nama Plugin',
+  description: 'Deskripsi singkat',
+  ownerOnly: true,
 
   handler: async (ctx) => {
     // logika triggered plugin di sini
@@ -240,42 +263,103 @@ export default {
 };
 ```
 
+> ⚠️ Plugin tanpa `intentDefinition` tetap bisa di-load dan berjalan, tapi Qwen **tidak akan pernah mengenali intent tersebut** karena tidak masuk ke system prompt. Pastikan selalu mengisi `intentDefinition`.
+
+> ℹ️ Plugin tanpa `groupContextPrompt` tetap bisa di-assign ke grup, tapi persona grup **tidak akan berubah** — grup tetap memakai persona yang sudah ada sebelumnya (atau null).
+
 ### Context Object Triggered Plugin (`ctx`)
 
-Sama seperti command plugin, **ditambah satu property**:
+Sama seperti command plugin, **ditambah dua property**:
 
 | Property | Tipe | Keterangan |
 |---|---|---|
-| `params` | object | Parameter yang diekstrak Qwen dari percakapan |
+| `params` | object | Parameter yang diekstrak Qwen dari percakapan atau gambar |
+| `attachments` | Array\|null | Attachment gambar jika pesan berisi gambar, null jika tidak ada |
 | `sock` | object | Baileys socket |
 | `msg` | object | Baileys message object |
 | `jid` | string | JID chat asal pesan |
 | `sender` | string | JID pengirim (owner) |
 | `isOwner` | boolean | Selalu `true` untuk triggered plugin |
-| `text` | string | Teks pesan asli dari owner |
+| `text` | string | Teks pesan atau `"[gambar dikirim]"` jika gambar tanpa caption |
 | `reply` | async fn | Fungsi reply dengan typing delay |
 | `groupChannel` | object\|undefined | Info channel grup — ada jika triggered dari grup terdaftar |
 
-### Mendaftarkan Intent Baru ke Qwen
+### Mendaftarkan Intent ke Qwen
 
-Intent detector di `intentSessionService.js` menggunakan system prompt yang sudah terdefinisi. Untuk menambah intent baru, **edit `INTENT_SYSTEM_PROMPT`** di file tersebut:
+Intent detector di `intentSessionService.js` memiliki **base system prompt** yang mendefinisikan peran dan format output Qwen (selalu JSON, tidak boleh teks biasa). Daftar intent yang Qwen kenali **tidak lagi hardcoded** di sana — melainkan dikumpulkan secara otomatis dari field `intentDefinition` di setiap triggered plugin.
 
-```js
-// Cari baris ini di services/intentSessionService.js
-const INTENT_SYSTEM_PROMPT = `... [1] "sendMessage" - ...`;
-
-// Tambahkan intent baru, contoh:
-// ... [2] "setReminder" - owner ingin membuat pengingat.
-//   Ekstrak: time (string, waktu dalam format HH:MM) dan message (string, isi pengingat).
-```
-
-Format penambahan intent di system prompt:
+**Alur build system prompt saat bot start:**
 
 ```
-[N] "namaIntent" - deskripsi kapan intent ini aktif.
+initOwnerIntentSession()
+  → _buildSystemPrompt()
+      → lazy import getIntentDefinitions() dari triggeredPluginHandler.js
+      → kumpulkan intentDefinition dari semua plugin yang sudah di-load
+      → gabungkan: BASE_PROMPT + daftar intent
+  → kirim ke Qwen → simpan session ID
+```
+
+Artinya: **cukup definisikan `intentDefinition` di plugin itu sendiri** — tidak perlu menyentuh `intentSessionService.js` sama sekali.
+
+Format `intentDefinition` yang baik:
+
+```
+"namaIntent" - deskripsi kapan intent ini aktif.
   Ekstrak: param1 (tipe, keterangan), param2 (tipe, keterangan).
   Kondisi khusus jika ada.
 ```
+
+### Sinkronisasi Context: Intent Session → Chat Session
+
+Setiap kali triggered plugin dijalankan, reply yang dikirim plugin ke owner di-**intercept** dan diteruskan ke **chat session** sebagai konteks sistem:
+
+```js
+// Yang terjadi di triggeredPluginHandler.js:
+
+// 1. Wrap reply untuk intercept teks yang dikirim plugin
+let capturedReply = null;
+const interceptedReply = async (replyText) => {
+  capturedReply = replyText;
+  await ctx.reply(replyText); // tetap kirim ke WhatsApp seperti biasa
+};
+
+// 2. Jalankan plugin dengan reply yang sudah di-intercept
+await plugin.handler({ ...ctx, reply: interceptedReply, params });
+
+// 3. Inject hasil plugin ke chat session (fire & forget)
+if (capturedReply) {
+  const systemContext = `[SYSTEM] Aksi intent "${intent}" telah dieksekusi. Hasilnya: ${capturedReply}`;
+  askAI({ jid, userText: systemContext, systemPrompt: null }); // tidak di-await
+}
+```
+
+**Tujuannya:** chat session AI di grup (atau DM) selalu tahu hasil aksi yang baru saja dieksekusi oleh bot — sehingga percakapan lanjutan tetap koheren.
+
+**Contoh tanpa sinkronisasi (before):**
+```
+Owner: "catat pengeluaran 50rb buat makan siang"
+  → intent: recordExpense { amount: 50000, category: 'makan' }
+  → plugin catat ke DB, reply: "✅ Pengeluaran 50rb (makan siang) berhasil dicatat" ✅
+Owner: "tadi berapa yang aku catat?"
+  → chat session tidak tahu → AI menjawab "Maaf, saya tidak tahu" ❌
+```
+
+**Contoh dengan sinkronisasi (after):**
+```
+Owner: "catat pengeluaran 50rb buat makan siang"
+  → intent: recordExpense { amount: 50000, category: 'makan' }
+  → plugin catat ke DB, reply: "✅ Pengeluaran 50rb (makan siang) berhasil dicatat" ✅
+  → inject ke chat session: "[SYSTEM] Aksi intent "recordExpense" telah dieksekusi.
+     Hasilnya: ✅ Pengeluaran 50rb (makan siang) berhasil dicatat"
+Owner: "tadi berapa yang aku catat?"
+  → chat session sudah punya konteks → AI menjawab "50.000 untuk makan siang" ✅
+```
+
+> ℹ️ Inject dilakukan **fire & forget** (tidak di-await) — tidak menambah latency ke plugin handler. Jika inject gagal (misal AI server down), plugin handler tetap jalan normal dan warning dicatat di log.
+
+> ℹ️ Jika plugin tidak memanggil `reply` sama sekali (plugin silent), inject tidak dilakukan.
+
+> ℹ️ Key chat session yang dipakai adalah `jid` (JID chat asal pesan) — bukan `sender`. Ini memastikan context masuk ke session yang tepat: grup Finance mendapat context hasil plugin Finance, DM mendapat context hasil plugin DM.
 
 ### Contoh: Triggered Plugin Sederhana
 
@@ -283,6 +367,8 @@ Format penambahan intent di system prompt:
 // plugins/triggered/setReminder.js
 export default {
   intent: 'setReminder',
+  intentDefinition: `"setReminder" - owner ingin membuat pengingat pada waktu tertentu. Ekstrak: time (string, format HH:MM) dan message (string, isi pengingat). Intent valid hanya jika waktu eksplisit disebutkan.`,
+  groupContextPrompt: `Kamu adalah asisten pengingat pribadi owner. Kamu memahami bahwa owner sering meminta untuk membuat pengingat pada waktu tertentu. Bantu owner mengelola jadwal dan pengingat dengan efisien. Jawab ringkas dalam Bahasa Indonesia.`,
 
   handler: async ({ params, reply }) => {
     const { time, message } = params;
@@ -303,6 +389,8 @@ export default {
 // plugins/triggered/sendMessage.js
 export default {
   intent: 'sendMessage',
+  intentDefinition: `"sendMessage" - owner ingin mengirim pesan ke nomor WhatsApp lain. Ekstrak: targetNumber (string, angka saja tanpa + atau spasi, format internasional 628xxx) dan message (string, isi pesan yang ingin disampaikan, tulis ulang secara natural orang pertama sesuai maksud owner). Intent ini valid hanya jika nomor target eksplisit disebutkan.`,
+  groupContextPrompt: `Kamu adalah asisten pengiriman pesan pribadi owner. Kamu memahami bahwa owner sering meminta untuk mengirimkan pesan ke kontak tertentu melalui WhatsApp. Bantu owner merumuskan pesan yang natural dan sesuai konteks. Jawab ringkas seperti chat biasa dalam Bahasa Indonesia.`,
 
   handler: async ({ params, sock, reply }) => {
     const { targetNumber, message } = params;
@@ -312,7 +400,7 @@ export default {
       return;
     }
 
-    const targetJid = `${targetNumber}@s.whatsapp.net`;
+    const targetJid = `${targetNumber.replace(/\D/g, '')}@s.whatsapp.net`;
 
     try {
       await sock.sendMessage(targetJid, { text: message });
@@ -326,7 +414,93 @@ export default {
 
 ---
 
-## 3️⃣ Database JSON (`db`)
+## 3️⃣ AI Service (`aiService`)
+
+Plugin dapat memanggil `askAI` langsung untuk generate konten dari Qwen — berguna untuk scheduled plugin atau plugin yang butuh response AI di luar alur chat biasa.
+
+### Import
+
+```js
+// Dari /plugins/namaPlugin.js
+import { askAI } from '../services/aiService.js';
+
+// Dari /plugins/triggered/ atau /plugins/scheduled/
+import { askAI } from '../../services/aiService.js';
+```
+
+### API
+
+```js
+const response = await askAI({
+  jid: 'scheduled:namaJob',  // key session — gunakan key unik agar tidak bercampur dengan session chat
+  userText: 'Prompt ke Qwen',
+  systemPrompt: 'Peran dan instruksi Qwen',  // opsional
+
+  thinkMode: 'auto',         // opsional — "auto" | "thinking" | "fast" (default server: "fast")
+  attachments: [],           // opsional — array attachment gambar (lihat format di bawah)
+});
+```
+
+### `thinkMode`
+
+Kontrol kedalaman reasoning Qwen:
+
+| Nilai | Kapan dipakai |
+|---|---|
+| `"fast"` | Intent detection, klasifikasi sederhana, reply singkat |
+| `"auto"` | Default — Qwen memilih sendiri sesuai kompleksitas |
+| `"thinking"` | Analisis mendalam, coding kompleks, reasoning multi-langkah |
+
+```js
+// Contoh: analisis laporan keuangan dengan reasoning mendalam
+const analysis = await askAI({
+  jid: 'scheduled:financeReport',
+  userText: 'Analisis pola pengeluaran bulan ini dan berikan rekomendasi.',
+  systemPrompt: 'Kamu adalah analis keuangan pribadi.',
+  thinkMode: 'thinking',
+});
+```
+
+### `attachments` — Kirim Gambar ke Qwen
+
+Format attachment yang diterima:
+
+```js
+attachments: [
+  {
+    filename: 'struk.jpg',        // nama file
+    data: '<base64 string>',      // isi file dalam base64
+    mime_type: 'image/jpeg',      // opsional — default server mendeteksi otomatis
+  }
+]
+```
+
+Gambar yang dikirim user via WhatsApp sudah otomatis dikemas sebagai `attachments` oleh `messageHandler.js` dan tersedia di `ctx.attachments`. Plugin dapat meneruskannya langsung ke `askAI`:
+
+```js
+// Di triggered plugin — gambar struk → ekstrak data keuangan
+handler: async ({ params, attachments, reply }) => {
+  if (attachments) {
+    const extracted = await askAI({
+      jid: 'triggered:extractReceipt',
+      userText: 'Ekstrak nominal, kategori, dan tanggal dari struk ini.',
+      systemPrompt: 'Kamu adalah asisten pencatatan keuangan. Ekstrak data dari gambar struk dan return JSON.',
+      thinkMode: 'auto',
+      attachments,
+    });
+    // proses extracted...
+  }
+}
+```
+
+> ℹ️ `ctx.attachments` bernilai `null` jika pesan tidak mengandung gambar. Selalu guard sebelum digunakan:
+> ```js
+> if (ctx.attachments) { /* ada gambar */ }
+> ```
+
+---
+
+## 4️⃣ Database JSON (`db`)
 
 Bot menyediakan database JSON ringan berbasis file. Setiap **collection** disimpan sebagai satu file di folder `/data/<collection>.json`. Database ini dapat digunakan oleh **semua jenis plugin**.
 
@@ -555,6 +729,25 @@ Bot mendukung sistem **grup sebagai channel dua arah** — input dan output — 
 
 Satu grup bisa di-assign ke **beberapa plugin key** dengan role berbeda. Contoh: grup "Ops" bisa jadi `output` untuk `reminder` dan `both` untuk `broadcast`.
 
+> ⚠️ **Aturan: satu plugin input per grup.** Setiap grup hanya boleh memiliki **satu** plugin dengan role `input` atau `both`. Jika owner mencoba assign plugin input kedua, request akan ditolak dengan pesan error yang menyebut plugin yang konflik. Untuk mengganti plugin input, hapus dulu yang lama dengan `!group channel <groupJid> <pluginLama> none`.
+
+### Persona Otomatis dari Plugin
+
+Saat owner assign plugin dengan role `input` atau `both` ke sebuah grup, sistem otomatis mengambil field `groupContextPrompt` dari plugin tersebut dan menyimpannya sebagai **persona grup** — menggantikan persona yang ada sebelumnya.
+
+```
+!group channel <groupJid> finance both
+  → cek ada plugin input lain? → tidak → lanjut
+  → ambil finance.groupContextPrompt
+  → simpan ke DB sebagai persona grup
+  → rebuild cache → warmup session AI grup dengan persona baru
+```
+
+Ini berarti:
+- Owner **tidak perlu set persona manual** via `!group persona` jika grup sudah ditautkan ke plugin yang punya `groupContextPrompt`
+- Saat plugin di-downgrade ke `output` atau dihapus (`none`), persona grup otomatis dikosongkan (kembali ke null → fallback ke persona owner)
+- Plugin tanpa `groupContextPrompt` → persona grup tidak berubah saat di-assign
+
 ### Alur Pesan di Grup
 
 ```
@@ -642,8 +835,14 @@ const result = await registerGroup('120363xxx@g.us', 'Grup Reminder');
 #### `setGroupChannel(groupJid, pluginKey, role)` — Set channel plugin pada grup
 ```js
 await setGroupChannel('120363xxx@g.us', 'reminder', 'both');
+// → jika berhasil: persona grup otomatis diambil dari reminder.groupContextPrompt (jika ada)
+// → jika grup sudah punya plugin input lain: { success: false, error: '...' }
+
 await setGroupChannel('120363xxx@g.us', 'broadcast', 'output');
-await setGroupChannel('120363xxx@g.us', 'reminder', 'none'); // hapus assignment
+// → role output tidak mempengaruhi persona grup
+
+await setGroupChannel('120363xxx@g.us', 'reminder', 'none');
+// → hapus assignment, persona grup dari plugin otomatis dihapus (kembali ke null)
 ```
 
 #### `createGroup(sock, groupName)` — Buat grup baru via Baileys
@@ -713,14 +912,25 @@ Plugin `group.js` menyediakan command lengkap untuk owner mengelola grup:
 | `!group info [groupJid]` | Detail grup. Di dalam grup: tanpa args → info grup ini |
 | `!group channel <groupJid> <pluginKey> <role>` | Set channel plugin pada grup |
 
-**Contoh alur register grup baru:**
+**Contoh alur register dan setup grup baru:**
 ```
 1. Owner masuk ke grup yang belum terdaftar
 2. Ketik: !group register
    → Bot otomatis ambil JID dan nama grup dari metadata
    → Reply: "✅ Grup ini berhasil didaftarkan!"
-3. Ketik: !group channel 120363xxx@g.us reminder both
-   → Grup ini sekarang jadi input+output untuk plugin reminder
+3. Ketik: !group channel 120363xxx@g.us finance both
+   → Grup ini sekarang jadi input+output untuk plugin finance
+   → Persona grup otomatis diset dari finance.groupContextPrompt
+   → Owner tidak perlu !group persona manual
+4. Owner chat natural di grup: "catat pengeluaran 50rb buat makan siang"
+   → Intent detection menangkap → plugin finance handler dipanggil
+   → Chat session AI grup juga punya konteks keuangan dari persona plugin
+```
+
+**Mengganti plugin input:**
+```
+!group channel 120363xxx@g.us finance none   ← hapus dulu plugin lama
+!group channel 120363xxx@g.us reminder both  ← baru assign plugin baru
 ```
 
 ---
@@ -777,10 +987,12 @@ listPersonas();                         // list semua persona
 import {
   listIntentSessions,
   deleteIntentSession,
+  resetSystemPromptCache,
 } from '../services/intentSessionService.js';
 
 listIntentSessions();            // list semua intent session aktif
 deleteIntentSession(senderJid);  // hapus intent session (akan di-reinit otomatis)
+resetSystemPromptCache();        // reset cache system prompt (rebuild dari plugin saat reinit)
 ```
 
 ### `groupService.js` — Group Channel System
@@ -841,9 +1053,11 @@ cronService.list();
 
 - [ ] File ada di `/plugins/triggered/`
 - [ ] Nama file tidak diawali `_`
-- [ ] File menggunakan `export default { intent, handler }`
-- [ ] `intent` cocok **persis** dengan intent yang ada di `INTENT_SYSTEM_PROMPT` (case-insensitive)
-- [ ] Intent baru sudah didaftarkan di `INTENT_SYSTEM_PROMPT` dalam `intentSessionService.js`
+- [ ] File menggunakan `export default { intent, intentDefinition, handler }`
+- [ ] `intent` cocok **persis** dengan intent yang akan dikembalikan Qwen (case-insensitive)
+- [ ] `intentDefinition` diisi dengan deskripsi jelas: kapan aktif + params apa yang diekstrak
+- [ ] `groupContextPrompt` diisi jika plugin akan digunakan sebagai channel input grup — persona grup otomatis diset dari field ini
+- [ ] Tidak perlu menyentuh `intentSessionService.js` — sistem otomatis inject `intentDefinition` ke system prompt Qwen
 - [ ] Selalu validasi `params` sebelum digunakan (Qwen bisa returnkan params kosong)
 - [ ] Handler mengembalikan balasan yang jelas ke owner
 
@@ -1023,6 +1237,12 @@ import logger from '../../utils/logger.js';
 
 export default {
   intent: 'namaIntent',
+  intentDefinition: `"namaIntent" - deskripsi kapan intent ini aktif dan apa yang owner maksud. Ekstrak: param1 (tipe, keterangan), param2 (tipe, keterangan). Tambahkan kondisi khusus jika diperlukan.`,
+  groupContextPrompt: `Teks persona domain yang relevan untuk grup yang ditautkan ke plugin ini. Tulis dalam satu baris tanpa newline. Contoh: "Kamu adalah asisten keuangan pribadi owner. Pahami semua transaksi, kategori pengeluaran, dan laporan yang disebutkan owner. Jawab ringkas dalam Bahasa Indonesia."`,
+
+  name: 'Nama Plugin',           // opsional, untuk log
+  description: 'Deskripsi',     // opsional
+  ownerOnly: true,               // opsional
 
   handler: async ({ sock, jid, sender, text, params, reply, groupChannel }) => {
     const { param1, param2 } = params;
@@ -1045,6 +1265,225 @@ export default {
 
 ---
 
+## 3️⃣ Scheduled Plugin
+
+### Cara Kerja
+
+Scheduled plugin berjalan **otomatis berdasarkan jadwal** tanpa membutuhkan trigger dari pesan apapun. Plugin di-load oleh `scheduledPluginLoader.js` saat bot start, cron job didaftarkan ke `cronService`, dan dijalankan oleh `cronService.startAll()` setelah `connection.open`.
+
+Plugin ini **tidak memiliki command handler** — tidak bisa dipanggil manual oleh user atau owner. Semua eksekusi dilakukan secara otomatis oleh scheduler.
+
+Scheduled plugin dapat mengakses:
+- **`aiService`** — untuk generate konten dari Qwen
+- **`groupService`** — untuk mendapatkan JID grup tertaut sebagai output
+- **`db`** — untuk menyimpan/membaca data
+- **`global._sock`** — untuk mengirim pesan ke WhatsApp (di-expose oleh `bot.js` saat connection open)
+
+> ℹ️ `global._sock` di-set saat `connection.open` dan di-clear saat `connection.close`. Scheduled plugin harus selalu guard dengan `global._sock?.sendMessage(...)` agar tidak error saat bot sedang reconnect.
+
+### Struktur File
+
+```js
+// plugins/scheduled/namaPlugin.js
+export default {
+  name: 'Nama Plugin',           // wajib — untuk log dan debug
+  description: 'Deskripsi singkat apa yang dilakukan plugin ini',  // wajib
+
+  crons: [
+    {
+      name: 'scheduled:namaJob', // wajib, harus unik — gunakan prefix "scheduled:"
+      expr: '@every_4h',         // wajib — cron expression atau alias
+      handler: async () => { },  // wajib — fungsi yang dijalankan
+      runOnStart: false,         // opsional — jalankan sekali saat bot start (default: false)
+    },
+  ],
+};
+```
+
+### Alias Cron Expression yang Didukung
+
+| Alias | Interval |
+|---|---|
+| `@every_<N>s` | Setiap N detik |
+| `@every_<N>m` | Setiap N menit |
+| `@every_<N>h` | Setiap N jam |
+| `@hourly` | Setiap jam (= `0 * * * *`) |
+| `@daily` | Setiap hari tengah malam |
+| `@weekly` | Setiap minggu |
+| `@monthly` | Setiap bulan |
+| Standard 5-field | `*/5 * * * *`, `0 9 * * 1-5`, dll |
+
+### Mengirim Pesan dari Scheduled Plugin
+
+Karena handler cron tidak menerima `sock` sebagai parameter, gunakan `global._sock` yang di-expose oleh `bot.js`:
+
+```js
+// Kirim ke grup tertaut
+const targetGroups = getGroupOutput('namaPluginKey');
+for (const groupJid of targetGroups) {
+  await global._sock?.sendMessage(groupJid, { text: content });
+}
+
+// Fallback ke owner jika tidak ada grup tertaut
+if (targetGroups.length === 0) {
+  const ownerJid = config.ownerLid || config.ownerJid;
+  await global._sock?.sendMessage(ownerJid, { text: content });
+}
+```
+
+### Menggunakan AI (Qwen) di Scheduled Plugin
+
+Gunakan `askAI` dengan `jid` unik yang tidak bentrok dengan session chat owner atau grup:
+
+```js
+import { askAI } from '../../services/aiService.js';
+
+const content = await askAI({
+  jid: 'scheduled:namaJob',   // key unik untuk session AI plugin ini
+  userText: 'Prompt ke Qwen',
+  systemPrompt: 'Peran dan instruksi Qwen untuk plugin ini',
+});
+```
+
+> ℹ️ Gunakan `jid` yang konsisten dan unik per scheduled plugin (misal `scheduled:economicNews`) agar session AI plugin tidak bercampur dengan session chat owner atau grup.
+
+### Contoh: Plugin News Ekonomi
+
+```js
+// plugins/scheduled/economicNews.js
+import { askAI } from '../../services/aiService.js';
+import { getGroupOutput } from '../../services/groupService.js';
+import config from '../../config/config.js';
+import logger from '../../utils/logger.js';
+
+const NEWS_PROMPT = `Kamu adalah analis ekonomi. Berikan ringkasan berita ekonomi global dan Indonesia yang paling relevan saat ini dalam format ringkas untuk WhatsApp. Maksimal 300 kata.`;
+
+async function sendEconomicNews() {
+  logger.info('📰 Menjalankan scheduled economic news...');
+
+  const newsContent = await askAI({
+    jid: 'scheduled:economicNews',
+    userText: 'Berikan update berita ekonomi sekarang.',
+    systemPrompt: NEWS_PROMPT,
+  });
+
+  if (!newsContent) return;
+
+  const targetGroups = getGroupOutput('economicNews');
+
+  if (targetGroups.length > 0) {
+    for (const groupJid of targetGroups) {
+      await global._sock?.sendMessage(groupJid, { text: newsContent });
+    }
+  } else {
+    const ownerJid = config.ownerLid || config.ownerJid;
+    await global._sock?.sendMessage(ownerJid, { text: newsContent });
+  }
+}
+
+export default {
+  name: 'Economic News',
+  description: 'Kirim ringkasan berita ekonomi global dan Indonesia setiap 4 jam',
+
+  crons: [
+    {
+      name: 'scheduled:economicNews',
+      expr: '@every_4h',
+      handler: sendEconomicNews,
+      runOnStart: false,
+    },
+  ],
+};
+```
+
+### Menautkan Scheduled Plugin ke Grup
+
+Scheduled plugin menggunakan sistem group channel yang sama dengan plugin lain:
+
+```
+!group channel <groupJid> economicNews output
+```
+
+Plugin kemudian memanggil `getGroupOutput('economicNews')` untuk mendapat daftar grup tujuan. Jika tidak ada grup tertaut, plugin fallback ke DM owner.
+
+### Checklist Scheduled Plugin
+
+- [ ] File ada di `/plugins/scheduled/`
+- [ ] Nama file tidak diawali `_`
+- [ ] Export default memiliki field `name`, `description`, dan `crons[]`
+- [ ] Setiap cron job memiliki `name` unik dengan prefix `scheduled:`
+- [ ] `expr` menggunakan alias atau cron expression yang valid
+- [ ] Handler menggunakan `global._sock?.sendMessage(...)` (bukan `sock.sendMessage`)
+- [ ] Jika menggunakan AI: `jid` untuk `askAI` unik dan konsisten (misal `scheduled:namaJob`)
+- [ ] Jika ada grup tertaut: gunakan `getGroupOutput('pluginKey')` dengan fallback ke owner
+
+### Template Scheduled Plugin
+
+```js
+// plugins/scheduled/namaPlugin.js
+import { askAI } from '../../services/aiService.js';
+import { getGroupOutput } from '../../services/groupService.js';
+import config from '../../config/config.js';
+import logger from '../../utils/logger.js';
+
+const SYSTEM_PROMPT = `Peran dan instruksi Qwen untuk plugin ini.`;
+
+async function runJob() {
+  logger.info('⏰ Menjalankan scheduled:namaJob...');
+
+  // 1. Generate konten dari AI (opsional)
+  let content;
+  try {
+    content = await askAI({
+      jid: 'scheduled:namaJob',
+      userText: 'Prompt ke Qwen',
+      systemPrompt: SYSTEM_PROMPT,
+    });
+  } catch (err) {
+    logger.error({ err: err.message }, '❌ Gagal generate konten dari AI');
+    return;
+  }
+
+  if (!content) return;
+
+  // 2. Kirim ke grup tertaut atau fallback ke owner
+  const targetGroups = getGroupOutput('namaPluginKey');
+
+  if (targetGroups.length > 0) {
+    for (const groupJid of targetGroups) {
+      try {
+        await global._sock?.sendMessage(groupJid, { text: content });
+        logger.info({ groupJid }, '✅ Pesan terkirim ke grup');
+      } catch (err) {
+        logger.error({ groupJid, err: err.message }, '❌ Gagal kirim ke grup');
+      }
+    }
+  } else {
+    const ownerJid = config.ownerLid || config.ownerJid;
+    if (ownerJid) {
+      await global._sock?.sendMessage(ownerJid, { text: content });
+      logger.info('✅ Pesan terkirim ke owner (fallback)');
+    }
+  }
+}
+
+export default {
+  name: 'Nama Plugin',
+  description: 'Deskripsi singkat plugin ini',
+
+  crons: [
+    {
+      name: 'scheduled:namaJob',
+      expr: '@every_4h',        // ganti sesuai kebutuhan
+      handler: runJob,
+      runOnStart: false,
+    },
+  ],
+};
+```
+
+---
+
 ## 🗂️ Ringkasan Cepat
 
 ```
@@ -1054,10 +1493,29 @@ Mau buat command plugin (!namaCmd)?
   → Restart bot
 
 Mau buat triggered plugin (via intent)?
-  → Daftarkan intent baru di INTENT_SYSTEM_PROMPT (intentSessionService.js)
   → Buat file di /plugins/triggered/namaIntent.js
-  → Export default { intent, handler }
+  → Export default { intent, intentDefinition, groupContextPrompt, handler }
+  → intentDefinition otomatis di-inject ke system prompt Qwen — tidak perlu edit file core
+  → groupContextPrompt otomatis jadi persona grup saat plugin di-assign sebagai input/both
   → Restart bot
+
+Mau buat scheduled plugin (berjalan otomatis)?
+  → Buat file di /plugins/scheduled/namaPlugin.js
+  → Export default { name, description, crons: [{ name, expr, handler, runOnStart }] }
+  → Gunakan global._sock?.sendMessage() untuk kirim pesan
+  → Gunakan getGroupOutput('pluginKey') untuk dapat grup tertaut, fallback ke owner jika kosong
+  → Restart bot
+
+Mau tautkan triggered plugin ke grup?
+  → !group channel <groupJid> <intentName> input/both
+  → Persona grup otomatis diambil dari groupContextPrompt plugin (jika diisi)
+  → Satu grup hanya boleh punya SATU plugin input — hapus dulu yang lama jika ingin ganti
+  → Untuk hapus: !group channel <groupJid> <intentName> none
+
+Mau tautkan scheduled plugin ke grup?
+  → !group channel <groupJid> <pluginKey> output
+  → Plugin otomatis kirim ke grup saat cron berjalan
+  → Tanpa grup tertaut: plugin fallback kirim ke owner
 
 Mau simpan data ke database?
   → import db from '../services/db.js'
