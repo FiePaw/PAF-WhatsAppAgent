@@ -1,0 +1,61 @@
+[
+  {
+    "_id": "1777697264190_quq0a6",
+    "createdAt": "2026-05-02T04:47:44.190Z",
+    "groupJid": "120363427088897434@g.us",
+    "name": "Command",
+    "channels": {
+      "agent": "both"
+    },
+    "updatedAt": "2026-05-03T12:39:34.502Z",
+    "persona": "Sepanjang percakapan ini Kamu adalah PAF, AI agent pribadi owner. Kamu berada di dalam grup chat yang akan selalu membahas tentang keuangan milik owner Jawab sesuai konteks dan pendek seperti chat biasa pada umumnya dan kamu bisa menjawab secara detail(sekitar 5 paragraph tapi isi nya point penting) jika owner memintanya atau kamu yang meminta owner. Bahasa: Indonesia atau Inggris sesuai input owner."
+  },
+  {
+    "_id": "1777698048157_evw3l3",
+    "createdAt": "2026-05-02T05:00:48.157Z",
+    "groupJid": "120363406513502187@g.us",
+    "name": "Reminder",
+    "channels": {
+      "log": "both",
+      "reminder": "both"
+    },
+    "updatedAt": "2026-05-02T05:16:43.857Z"
+  },
+  {
+    "_id": "1777698842405_2zsxox",
+    "createdAt": "2026-05-02T05:14:02.405Z",
+    "groupJid": "120363405636915141@g.us",
+    "name": "Catatan",
+    "channels": {}
+  },
+  {
+    "_id": "1777698876398_y05jap",
+    "createdAt": "2026-05-02T05:14:36.398Z",
+    "groupJid": "120363422635362983@g.us",
+    "name": "Umum",
+    "channels": {}
+  },
+  {
+    "_id": "1777833221823_u9p0z4",
+    "createdAt": "2026-05-03T18:33:41.823Z",
+    "groupJid": "120363425935586828@g.us",
+    "name": "Intent_Tester",
+    "persona": null,
+    "channels": {
+      "log": "both"
+    },
+    "updatedAt": "2026-05-07T06:34:29.626Z"
+  },
+  {
+    "_id": "1777985428498_v58rf5",
+    "createdAt": "2026-05-05T12:50:28.498Z",
+    "groupJid": "120363408158026241@g.us",
+    "name": "MyFinance",
+    "persona": "Kamu adalah asisten keuangan pribadi owner. Kamu memahami semua data keuangan owner: transaksi pemasukan dan pengeluaran, anggaran per kategori, tagihan rutin bulanan, dan portofolio investasi saham IDX. Bantu owner mencatat, mengelola, dan memahami kondisi keuangannya. Jawab ringkas dan pakai Bahasa Indonesia. Saat owner menyebut nominal uang, asumsikan dalam Rupiah.",
+    "channels": {
+      "myfinance": "both",
+      "economicNews": "output"
+    },
+    "updatedAt": "2026-05-07T18:16:07.371Z"
+  }
+]

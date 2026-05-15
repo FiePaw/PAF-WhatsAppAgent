@@ -1,0 +1,62 @@
+[
+  {
+    "_id": "1777699048064_vsirzg",
+    "createdAt": "2026-05-02T05:17:28.064Z",
+    "jid": "225545979723871@lid",
+    "sender": "225545979723871@lid",
+    "message": "tes aja sii",
+    "dueAt": 1777699108064,
+    "sent": true,
+    "updatedAt": "2026-05-02T05:19:00.058Z"
+  },
+  {
+    "_id": "1777699186665_ustcqs",
+    "createdAt": "2026-05-02T05:19:46.665Z",
+    "jid": "120363406513502187@g.us",
+    "sender": "225545979723871@lid",
+    "message": "tes kedua",
+    "dueAt": 1777699246665,
+    "sent": true,
+    "updatedAt": "2026-05-02T05:21:00.488Z"
+  },
+  {
+    "_id": "1777718667440_5ta2su",
+    "createdAt": "2026-05-02T10:44:27.440Z",
+    "jid": "120363406513502187@g.us",
+    "sender": "225545979723871@lid",
+    "message": "merge WhatsAppFormatter.js sama yang new",
+    "dueAt": 1777719267440,
+    "sent": true,
+    "updatedAt": "2026-05-02T10:55:03.485Z"
+  },
+  {
+    "_id": "1777718715694_o67j5r",
+    "createdAt": "2026-05-02T10:45:15.694Z",
+    "jid": "120363406513502187@g.us",
+    "sender": "225545979723871@lid",
+    "message": "ngetes new changelog sama persona per grup bisa gak intent nya work kalo cuma 1 session",
+    "dueAt": 1777719615693,
+    "sent": true,
+    "updatedAt": "2026-05-02T11:01:03.546Z"
+  },
+  {
+    "_id": "1777718759666_fb8kqv",
+    "createdAt": "2026-05-02T10:45:59.666Z",
+    "jid": "120363406513502187@g.us",
+    "sender": "225545979723871@lid",
+    "message": "debug/optimize intent apakah bisa lebih mudah implementasi nya buat plugin baru.",
+    "dueAt": 1777719659666,
+    "sent": true,
+    "updatedAt": "2026-05-02T11:01:04.020Z"
+  },
+  {
+    "_id": "1777863189841_kdx1b2",
+    "createdAt": "2026-05-04T02:53:09.841Z",
+    "jid": "225545979723871@lid",
+    "sender": "225545979723871@lid",
+    "message": "akun claude ifufafe berhasil create MyFinance web",
+    "dueAt": 1777864089840,
+    "sent": true,
+    "updatedAt": "2026-05-04T03:09:03.852Z"
+  }
+]
