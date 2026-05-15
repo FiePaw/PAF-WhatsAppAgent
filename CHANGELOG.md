@@ -5,6 +5,92 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.8.0] — 2026-05-15
+
+### Added
+- `config/persona.json` — field `model` opsional di setiap entry persona. Setiap persona kini bisa menentukan akun Qwen spesifik yang dipakai untuk sesi AI-nya. Jika tidak diset, fallback ke `AI_MODEL` di `.env` (default: `qwen`).
+- `config/persona.json` — entry baru `"intentSession"`: object khusus yang menyimpan konfigurasi untuk intent detection session. Saat ini hanya mendukung field `model` — system prompt intent session tetap dibangun otomatis dari triggered plugins, bukan dari sini.
+- `services/personaService.js` — fungsi baru `getIntentSessionModel()`: membaca `personaData.intentSession.model` dan return string nama akun, atau `null` jika tidak diset. Digunakan oleh `intentSessionService` saat membangun request ke Qwen.
+- `services/personaService.js` — fungsi baru `getPersonaPrompt(senderJid, owner)`: helper backward-compat yang return hanya string prompt (tanpa `model`). Berguna untuk kode yang masih mengexpect string dari `getPersona`.
+
+### Changed
+- `config/persona.json` — format entry persona diubah dari string menjadi object `{ "prompt": "...", "model": "..." }`. Format lama (string) tetap kompatibel — `personaService` menormalisasi keduanya secara otomatis. Entry `"owner"` kini menggunakan `"model": "account1"`. Entry `"intentSession"` menggunakan `"model": "account2"`. Entry `"default"` dan `"users"` tidak memiliki `model` (fallback ke default).
+- `services/personaService.js` — `getPersona(senderJid, owner)` sekarang return object `{ prompt: string, model: string|null }` (sebelumnya: string). Semua caller di `messageHandler.js` dan `bot.js` sudah diperbarui untuk destructure return value ini. `setPersona()` dan `setGlobalPersona()` menerima parameter `model` opsional — jika tidak diisi, model lama dipertahankan.
+- `services/personaService.js` — `listPersonas()` kini menampilkan model di setiap entry dalam format `[accountX] prompt...`.
+- `services/aiService.js` — `askAI()` menerima parameter baru `model` (opsional). Jika diisi, nilai ini override `config.ai.model` di request body. Jika `null`/`undefined`, tetap pakai model dari config.
+- `services/aiService.js` — `warmupOwnerSession(ownerJid, systemPrompt, model)` menerima parameter ketiga `model` opsional. Model diteruskan ke `sendRequest()` saat warmup sehingga session owner langsung terikat ke akun yang benar sejak inisialisasi.
+- `services/aiService.js` — `sendRequest()` menerima parameter `model` opsional. Logika pemilihan model: `model param || config.ai.model`.
+- `services/Intentsessionservice.js` — import `getIntentSessionModel` dari `personaService`. Semua request ke Qwen di `initIntentSession()` dan `_sendToIntentSession()` kini menggunakan `intentModel = getIntentSessionModel() || config.ai.model` sebagai nilai `model` di request body.
+- `core/messageHandler.js` — semua pemanggilan `getPersona()` kini destructure `{ prompt: systemPrompt, model }`. Parameter `model` diteruskan ke `askAI()` di semua alur: owner DM, grup terdaftar, dan non-owner.
+- `core/bot.js` — warmup session owner kini destructure `{ prompt: ownerPrompt, model: ownerModel }` dari `getPersona()` dan meneruskan `ownerModel` ke `warmupOwnerSession()`. Warmup grup tetap pass `null` sebagai model (grup tidak memiliki model khusus).
+
+### Behavior
+- Sebelumnya: semua percakapan AI (owner, user biasa, grup, intent session) menggunakan akun yang sama dari `AI_MODEL` di `.env`.
+- Sekarang: setiap persona bisa dikonfigurasi untuk menggunakan akun Qwen yang berbeda secara independen. Owner chat pakai `account1`, intent detection pakai `account2`, user lain pakai akun default. Konfigurasi dilakukan di `persona.json` tanpa restart bot (hot-reload aktif). Untuk menambah model ke user tertentu cukup tambah field `"model"` di entry user yang bersangkutan.
+
+### Architecture
+```
+persona.json
+  "owner":        { prompt, model: "account1" }  → owner chat  → account1
+  "default":      { prompt }                      → user biasa  → AI_MODEL (.env)
+  "intentSession":{ model: "account2" }           → intent det. → account2
+  "users": {
+    "628xxx":     { prompt, model?: "accountX" }  → user spesifik → accountX atau AI_MODEL
+  }
+
+getPersona(jid, isOwner)
+  → { prompt: string, model: string|null }
+  → model null = fallback ke config.ai.model
+
+messageHandler:
+  const { prompt: systemPrompt, model } = getPersona(sender, owner)
+  askAI({ ..., model })  ← model diteruskan ke request body
+
+intentSessionService:
+  const intentModel = getIntentSessionModel() || config.ai.model
+  POST /v1/chat/completions { model: intentModel, ... }
+```
+
+---
+
+## [2.7.0] — 2026-05-15
+
+### Added
+- `services/aiService.js` — fungsi baru `generateImage({ jid, prompt, accountModel })`: kirim request ke Qwen dengan `task_type: "create_image"`. Return `{ text, urls[] }` — URL gambar ada di array `urls`, bukan di `choices[0].message.content`. Timeout diset 180 detik sesuai dokumentasi API.
+- `services/aiService.js` — fungsi baru `generateVideo({ jid, prompt, accountModel })`: kirim request ke Qwen dengan `task_type: "create_video"`. Return `{ text, urls[] }`. Timeout 300 detik.
+- `services/aiService.js` — fungsi baru `webSearch({ jid, query, accountModel })`: kirim request ke Qwen dengan `task_type: "web_search"`. Return string teks hasil pencarian. Output field `urls` selalu `[]` untuk task ini. Timeout 120 detik.
+- `services/aiService.js` — fungsi baru `listModels()`: fetch `GET /v1/models` dari server dan return array nama akun yang aktif (misal `['account1', 'account2', 'account6']`). Listing dinamis — mencerminkan cookie aktif di worker saat dipanggil.
+- `services/aiService.js` — konstanta `TASK_TIMEOUTS`: map task type ke nilai timeout masing-masing (`chat: 120_000`, `web_search: 120_000`, `create_image: 180_000`, `create_video: 300_000`). Menggantikan satu nilai `timeout` hardcoded di `axios.create()`.
+
+### Changed
+- `services/aiService.js` — `sendRequest()` menerima parameter baru `taskType` (opsional, default `"chat"`). Jika `taskType` bukan `"chat"`, request dianggap sebagai special task: tidak menggunakan `X-Session-ID` (selalu session baru), field `task_type` disertakan di request body, dan session ID dari response tidak disimpan ke `sessionStore`. Return value diubah dari `string` menjadi `{ text, urls }`.
+- `services/aiService.js` — `askAI()` kini eksplisit pass `taskType: 'chat'` ke `sendRequest()` dan mengekstrak hanya `.text` dari return value. Signature eksternal tidak berubah — caller yang sudah ada tidak perlu dimodifikasi.
+- `services/aiService.js` — timeout tidak lagi di-set di `axios.create()`. Setiap request kini menggunakan timeout dari `TASK_TIMEOUTS[taskType]` yang dipass saat pemanggilan `client.post()`.
+- `services/Intentsessionservice.js` — timeout axios dikoreksi dari `3000000` (~50 menit) menjadi `120_000` (120 detik) sesuai rekomendasi dokumentasi API untuk task `chat` dan `web_search`.
+- `plugins/scheduled/economicNews.js` — import diganti dari `askAI` ke `webSearch`. Pengambilan berita kini menggunakan `task_type: "web_search"` agar Qwen melakukan pencarian web real-time, bukan menjawab dari knowledge cutoff. Parameter `thinkMode: 'thinking'` dihapus karena `webSearch` tidak mendukung kombinasi `task_type` + `think_mode`.
+
+### Behavior
+- Sebelumnya: `aiService` hanya mendukung satu jenis interaksi (chat teks). Semua request menggunakan timeout tunggal 3000000ms yang tidak konsisten. `economicNews` menggunakan `askAI` dengan `thinkMode: 'thinking'` yang menghasilkan berita dari knowledge model (bukan real-time).
+- Sekarang: `aiService` mendukung empat task type — `chat`, `web_search`, `create_image`, `create_video`. Timeout disesuaikan per task. `economicNews` menggunakan `webSearch` sehingga berita yang dihasilkan berdasarkan hasil pencarian web terkini. `generateImage` dan `generateVideo` tersedia sebagai fungsi siap pakai untuk triggered/scheduled plugin yang ingin memanfaatkan kemampuan generasi media Qwen.
+
+### Architecture
+```
+aiService exports:
+  askAI()          → task_type: chat       → { text }      → timeout 120s
+  webSearch()      → task_type: web_search → { text }      → timeout 120s
+  generateImage()  → task_type: create_image → { urls[] }  → timeout 180s
+  generateVideo()  → task_type: create_video → { urls[] }  → timeout 300s
+  listModels()     → GET /v1/models        → string[]      → timeout 10s
+  warmupOwnerSession() / resetSession() / checkHealth() — tidak berubah
+
+Task types khusus (non-chat):
+  - Tidak pakai X-Session-ID (selalu session baru)
+  - Tidak simpan session ke sessionStore
+  - URL media ada di response.urls, bukan choices[0].message.content
+```
+
+---
+
 ## [2.6.0] — 2026-05-09
 
 ### Added

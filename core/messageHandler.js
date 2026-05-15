@@ -144,14 +144,17 @@ export async function handleMessage(sock, msg, plugins) {
     const groupCtx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply, groupChannel: channel, attachments };
     // Persona grup dipakai jika ada, fallback ke persona owner
     const groupPersona = getGroupPersona(jid);
-    const groupSystemPrompt = groupPersona || getPersona(sender, owner);
+    const ownerPersonaObj = getPersona(sender, owner);
+    const groupSystemPrompt = groupPersona || ownerPersonaObj.prompt;
+    // Model: grup tidak punya model sendiri, pakai model dari persona owner sebagai fallback
+    const groupModel = ownerPersonaObj.model;
 
     const [intentHandled, groupAiReply] = await Promise.all([
       // Intent detection hanya jika grup punya input channel
       channel.input
         ? handleTriggeredPlugin(groupCtx)
         : Promise.resolve(false),
-      askAI({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments }).catch((err) => {
+      askAI({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, model: groupModel }).catch((err) => {
         logger.error({ sender, jid, err: err.message }, 'Error saat request ke AI (group)');
         return null;
       }),
@@ -195,11 +198,11 @@ export async function handleMessage(sock, msg, plugins) {
   // ─── Owner: intent detection + AI chat berjalan paralel ─────────────────
   if (owner) {
     const ctx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply, attachments };
-    const systemPrompt = getPersona(sender, owner);
+    const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
     const [intentHandled, aiReply] = await Promise.all([
       handleTriggeredPlugin(ctx),
-      askAI({ jid: sender, userText: intentText, systemPrompt, attachments }).catch((err) => {
+      askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model }).catch((err) => {
         logger.error({ sender, err: err.message }, 'Error saat request ke AI (parallel)');
         return null;
       }),
@@ -216,10 +219,10 @@ export async function handleMessage(sock, msg, plugins) {
   }
 
   // ─── Non-owner: AI chat saja ─────────────────────────────────────────────
-  const systemPrompt = getPersona(sender, owner);
+  const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
   try {
-    const aiReply = await askAI({ jid: sender, userText: intentText, systemPrompt, attachments });
+    const aiReply = await askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model });
     await reply(aiReply);
   } catch (err) {
     logger.error({ sender, err: err.message }, 'Error saat request ke AI');

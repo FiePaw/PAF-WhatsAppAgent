@@ -1,6 +1,24 @@
 // services/personaService.js
 // Manage persona per user dari config/persona.json
 // Hot-reload: persona.json bisa diedit tanpa restart bot
+//
+// Struktur persona.json yang didukung:
+//
+//   Format BARU (object dengan prompt + model opsional):
+//     "owner":   { "prompt": "...", "model": "account1" }
+//     "default": { "prompt": "..." }
+//     "users":   { "628xxx": { "prompt": "...", "model": "account6" } }
+//     "intentSession": { "model": "account2" }  ← model khusus untuk intent session
+//
+//   Format LAMA (string langsung) — tetap kompatibel:
+//     "owner":   "prompt string..."
+//     "default": "prompt string..."
+//     "users":   { "628xxx": "prompt string..." }
+//
+// getPersona()      → { prompt: string, model: string|null }
+// getPersonaPrompt()→ string (untuk backward compat)
+// getPersonaModel() → string|null
+
 import { readFileSync, watchFile, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -28,26 +46,24 @@ function loadPersonaFile() {
   }
 }
 
-/**
- * Ambil persona untuk sender tertentu.
- * Prioritas:
- *   1. persona spesifik user di users[nomor] atau users[lid]
- *   2. persona 'owner' jika sender adalah owner
- *   3. persona 'default' sebagai fallback
- *
- * @param {string} senderJid - JID sender (format @s.whatsapp.net atau @lid)
- * @param {boolean} owner    - apakah sender adalah owner
- * @returns {string}
- */
-export function getPersona(senderJid, owner) {
-  const number = jidToNumber(senderJid);           // angka saja
-  const lidKey = senderJid.endsWith('@lid')
-    ? senderJid                                     // "225545979723871@lid"
-    : null;
+// ─── Helper: normalisasi entry persona ke { prompt, model } ──────────────
+// Entry bisa berupa string (format lama) atau object { prompt, model? }
+function normalizeEntry(entry) {
+  if (!entry) return { prompt: '', model: null };
+  if (typeof entry === 'string') return { prompt: entry, model: null };
+  return {
+    prompt: entry.prompt || '',
+    model: entry.model || null,
+  };
+}
 
+// ─── Resolve entry mentah dari persona.json untuk senderJid ──────────────
+function resolveRawEntry(senderJid, owner) {
+  const number = jidToNumber(senderJid);
+  const lidKey = senderJid.endsWith('@lid') ? senderJid : null;
   const users = personaData.users || {};
 
-  // 1. Cek persona spesifik: cocokkan nomor atau LID
+  // 1. Persona spesifik user
   if (users[number]) return users[number];
   if (lidKey && users[lidKey]) return users[lidKey];
 
@@ -58,17 +74,66 @@ export function getPersona(senderJid, owner) {
   return personaData.default || '';
 }
 
+// ─── Public API ───────────────────────────────────────────────────────────
+
 /**
- * Simpan / update persona untuk satu user ke persona.json
+ * Ambil persona lengkap { prompt, model } untuk sender tertentu.
+ * model null berarti gunakan fallback dari config (AI_MODEL/.env).
+ *
  * @param {string} senderJid
- * @param {string} persona
+ * @param {boolean} owner
+ * @returns {{ prompt: string, model: string|null }}
  */
-export function setPersona(senderJid, persona) {
+export function getPersona(senderJid, owner) {
+  return normalizeEntry(resolveRawEntry(senderJid, owner));
+}
+
+/**
+ * Ambil HANYA prompt string (backward-compat untuk kode yang masih expect string).
+ *
+ * @param {string} senderJid
+ * @param {boolean} owner
+ * @returns {string}
+ */
+export function getPersonaPrompt(senderJid, owner) {
+  return getPersona(senderJid, owner).prompt;
+}
+
+/**
+ * Ambil model khusus untuk intent session (key "intentSession" di persona.json).
+ * Return null jika tidak diset — aiService akan fallback ke config.ai.model.
+ *
+ * @returns {string|null}
+ */
+export function getIntentSessionModel() {
+  const entry = personaData.intentSession;
+  if (!entry) return null;
+  if (typeof entry === 'string') return null; // tidak ada model jika format lama
+  return entry.model || null;
+}
+
+/**
+ * Simpan / update persona untuk satu user ke persona.json.
+ * Jika entry lama sudah object, pertahankan model-nya.
+ *
+ * @param {string} senderJid
+ * @param {string} promptText
+ * @param {string|null} [model]
+ */
+export function setPersona(senderJid, promptText, model = null) {
   const number = jidToNumber(senderJid);
   if (!personaData.users) personaData.users = {};
-  personaData.users[number] = persona;
+
+  const existing = personaData.users[number];
+  const existingModel = (existing && typeof existing === 'object') ? existing.model : null;
+  const finalModel = model ?? existingModel;
+
+  personaData.users[number] = finalModel
+    ? { prompt: promptText, model: finalModel }
+    : { prompt: promptText };
+
   savePersonaFile();
-  logger.info({ number }, '✅ Persona user diperbarui');
+  logger.info({ number, model: finalModel || '(default)' }, '✅ Persona user diperbarui');
 }
 
 /**
@@ -87,25 +152,50 @@ export function deletePersona(senderJid) {
 }
 
 /**
- * Update persona global (owner atau default)
+ * Update persona global (owner atau default).
+ * Model opsional — jika tidak diisi, model lama dipertahankan.
+ *
  * @param {'owner'|'default'} key
- * @param {string} persona
+ * @param {string} promptText
+ * @param {string|null} [model]
  */
-export function setGlobalPersona(key, persona) {
+export function setGlobalPersona(key, promptText, model = null) {
   if (key !== 'owner' && key !== 'default') return;
-  personaData[key] = persona;
+
+  const existing = personaData[key];
+  const existingModel = (existing && typeof existing === 'object') ? existing.model : null;
+  const finalModel = model ?? existingModel;
+
+  personaData[key] = finalModel
+    ? { prompt: promptText, model: finalModel }
+    : { prompt: promptText };
+
   savePersonaFile();
-  logger.info({ key }, `✅ Persona global '${key}' diperbarui`);
+  logger.info({ key, model: finalModel || '(default)' }, `✅ Persona global '${key}' diperbarui`);
 }
 
 /**
- * List semua persona yang ada
+ * List semua persona yang ada (menampilkan prompt + model)
  */
 export function listPersonas() {
+  const fmt = (entry) => {
+    const { prompt, model } = normalizeEntry(entry);
+    return model ? `[${model}] ${prompt}` : prompt;
+  };
+
+  const users = personaData.users || {};
+  const formatted = {};
+  for (const [key, val] of Object.entries(users)) {
+    formatted[key] = fmt(val);
+  }
+
   return {
-    owner: personaData.owner || '(tidak diset)',
-    default: personaData.default || '(tidak diset)',
-    users: personaData.users || {},
+    owner: fmt(personaData.owner) || '(tidak diset)',
+    default: fmt(personaData.default) || '(tidak diset)',
+    intentSession: personaData.intentSession?.model
+      ? `model: ${personaData.intentSession.model}`
+      : '(model default)',
+    users: formatted,
   };
 }
 

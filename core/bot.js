@@ -133,9 +133,9 @@ export async function startBot() {
       // sudah punya konteks persona sejak percakapan pertama.
       const ownerJid = config.ownerLid || config.ownerJid;
       if (ownerJid) {
-        const ownerPersona = getPersona(ownerJid, true);
-        if (ownerPersona) {
-          await warmupOwnerSession(ownerJid, ownerPersona);
+        const { prompt: ownerPrompt, model: ownerModel } = getPersona(ownerJid, true);
+        if (ownerPrompt) {
+          await warmupOwnerSession(ownerJid, ownerPrompt, ownerModel);
         }
       }
 
@@ -147,7 +147,7 @@ export async function startBot() {
         logger.info({ count: groupsWithPersona.length }, '🔥 Warming up group persona sessions...');
         await Promise.allSettled(
           groupsWithPersona.map(({ groupJid, name, persona }) =>
-            warmupOwnerSession(groupJid, persona)
+            warmupOwnerSession(groupJid, persona, null) // grup tidak punya model khusus
               .then(() => logger.info({ groupJid, name }, '✅ Group persona session siap'))
               .catch((err) => logger.warn({ groupJid, name, err: err.message }, '⚠️ Gagal warmup group persona session'))
           )

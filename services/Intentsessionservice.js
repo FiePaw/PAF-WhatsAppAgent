@@ -12,11 +12,12 @@
 
 import axios from 'axios';
 import config from '../config/config.js';
+import { getIntentSessionModel } from './personaService.js';
 import logger from '../utils/logger.js';
 
 const client = axios.create({
   baseURL: config.ai.baseUrl,
-  timeout: 3000000,
+  timeout: 120_000, // 120 detik (sesuai rekomendasi API untuk task chat/web_search)
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -88,8 +89,11 @@ export async function initIntentSession(senderJid) {
 
     const systemPrompt = await _buildSystemPrompt();
 
+    // Gunakan model khusus intent session jika diset di persona.json, fallback ke config
+    const intentModel = getIntentSessionModel() || config.ai.model;
+
     const res = await client.post('/v1/chat/completions', {
-      model: config.ai.model,
+      model: intentModel,
       messages: [
         {
           role: 'user',
@@ -165,8 +169,9 @@ export async function detectIntentWithSession(senderJid, text, attachments = nul
 // ─── Internal: kirim ke session dengan auto-reinit jika 404 ──────────────
 async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false, attachments = null) {
   try {
+    const intentModel = getIntentSessionModel() || config.ai.model;
     const body = {
-      model: config.ai.model,
+      model: intentModel,
       messages: [{ role: 'user', content: text }],
       stream: false,
       think_mode: 'fast',
