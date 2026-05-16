@@ -15,6 +15,8 @@ import { initOwnerIntentSession } from '../services/intentSessionService.js';
 import { warmupOwnerSession } from '../services/aiService.js';
 import { getPersona } from '../services/personaService.js';
 import { listGroupsWithPersona } from '../services/groupService.js';
+import { initProactiveService } from '../services/proactiveService.js';
+import { pruneAllOldMessages } from '../services/chatHistoryService.js';
 import cronService from '../services/cronService.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
@@ -157,6 +159,12 @@ export async function startBot() {
       // ── Start semua cron job yang sudah di-register plugins ───────────────
       cronService.startAll();
       logger.info('📅 Semua cron job dijalankan');
+
+      // ── Init proactive service ────────────────────────────────────────────
+      // Cleanup chatHistory lama lalu daftarkan cron job analisa per jam
+      await pruneAllOldMessages();
+      initProactiveService();
+      logger.info('🤖 Proactive service aktif');
     }
   });
 

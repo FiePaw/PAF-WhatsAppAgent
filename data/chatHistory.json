@@ -1,0 +1,1514 @@
+[
+  {
+    "_id": "1778844544965_u3wis4",
+    "createdAt": "2026-05-15T11:29:04.965Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "yooo met malem paf",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:29:04.965Z"
+  },
+  {
+    "_id": "1778844600329_oepvja",
+    "createdAt": "2026-05-15T11:30:00.329Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Malem. Ada apa?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:30:00.328Z"
+  },
+  {
+    "_id": "1778844627100_pblc9h",
+    "createdAt": "2026-05-15T11:30:27.100Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "gua mau mandi ahhh kayak nya enak mandi jam segini yee di bekasi",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:30:27.099Z"
+  },
+  {
+    "_id": "1778844634316_33qoch",
+    "createdAt": "2026-05-15T11:30:34.316Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Mandi malem emang seger. Hati-hati kedinginan ya.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:30:34.316Z"
+  },
+  {
+    "_id": "1778844645518_t2e7mo",
+    "createdAt": "2026-05-15T11:30:45.518Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "emang gapapa mandi jam segini?",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:30:45.518Z"
+  },
+  {
+    "_id": "1778844652689_8hlma7",
+    "createdAt": "2026-05-15T11:30:52.689Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Gapapa, asal air hangat dan langsung keringin badan.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:30:52.689Z"
+  },
+  {
+    "_id": "1778844667762_bkrlq4",
+    "createdAt": "2026-05-15T11:31:07.762Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "harus banget aer hangat?",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:31:07.761Z"
+  },
+  {
+    "_id": "1778844674888_qpiatv",
+    "createdAt": "2026-05-15T11:31:14.888Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Enggak wajib, tapi biar gak masuk angin.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:31:14.888Z"
+  },
+  {
+    "_id": "1778844679669_fabfx1",
+    "createdAt": "2026-05-15T11:31:19.669Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "oiya gua si ada rencana mau makan abis mandi",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:31:19.668Z"
+  },
+  {
+    "_id": "1778844686841_pec2sf",
+    "createdAt": "2026-05-15T11:31:26.841Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Sikat. Mau makan apa abis mandi?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:31:26.840Z"
+  },
+  {
+    "_id": "1778844694270_qxbzdr",
+    "createdAt": "2026-05-15T11:31:34.270Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "eh tapi gua mau sholat dulu dehh magrib",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:31:34.269Z"
+  },
+  {
+    "_id": "1778844701208_2ubplh",
+    "createdAt": "2026-05-15T11:31:41.208Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Bagus. Sholat dulu biar hati tenang.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:31:41.207Z"
+  },
+  {
+    "_id": "1778844728882_4hic0u",
+    "createdAt": "2026-05-15T11:32:08.882Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "iyee gua sholat dulu dah..",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:32:08.881Z"
+  },
+  {
+    "_id": "1778844735970_h7azqt",
+    "createdAt": "2026-05-15T11:32:15.970Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Mantap. Kabarin kalau udah selesai.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:32:15.970Z"
+  },
+  {
+    "_id": "1778845215465_ur7mlb",
+    "createdAt": "2026-05-15T11:40:15.465Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Malem ini. Gua baru aja selesai sholat magrib",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:40:15.464Z"
+  },
+  {
+    "_id": "1778845245567_12ea98",
+    "createdAt": "2026-05-15T11:40:45.567Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "wah, alhamdulillah. akhirnya kelar juga ya. mumpung masih awal-awal isya nih, jangan ditunda-tunda lagi sholat berikutnya.\nlagi ngapain lu sekarang? abis sholat biasanya enaknya santai dulu atau langsung lanjut aktivitas?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:40:45.567Z"
+  },
+  {
+    "_id": "1778845273239_mkwdqi",
+    "createdAt": "2026-05-15T11:41:13.239Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Nyantai gak si? Tapi tadi gua ada rencana mau mandi abis sholat",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:41:13.238Z"
+  },
+  {
+    "_id": "1778845283837_w22vek",
+    "createdAt": "2026-05-15T11:41:23.837Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "ya santai aja gapapa. mandi abis magrib malah enak, biar seger dan bersih sebelum lanjut aktivitas malam.\ntadi kan lu sempet bilang mau makan abis mandi. jadi rencana mau makan apa malem ini?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:41:23.836Z"
+  },
+  {
+    "_id": "1778845285749_ijkkrb",
+    "createdAt": "2026-05-15T11:41:25.749Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Abis mandi makan abis itu ngegym malem",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:41:25.748Z"
+  },
+  {
+    "_id": "1778845296325_76rdpa",
+    "createdAt": "2026-05-15T11:41:36.325Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "mantap banget rutinitasnya. jadi flow-nya: mandi -> makan -> gym malem.\npastiin jeda antara makan sama gym cukup ya, biar gak berat di perut pas latihan. lu rencana mau latih apa malam ini? upper body lagi atau legs?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:41:36.324Z"
+  },
+  {
+    "_id": "1778845323778_52j34j",
+    "createdAt": "2026-05-15T11:42:03.778Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Rencana mau latihan back sama biceps sih",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:42:03.778Z"
+  },
+  {
+    "_id": "1778845334245_obyr62",
+    "createdAt": "2026-05-15T11:42:14.245Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "nice, back & biceps combo klasik. pake alat cable fly itu buat chest kan? jadi malam ini fokus ke pull movement aja.\ningatin ya, karena lu suka nunda-nunda, jangan sampai sesi gym-nya malah ketunda juga. gaskeun!",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:42:14.244Z"
+  },
+  {
+    "_id": "1778845688531_j52u8w",
+    "createdAt": "2026-05-15T11:48:08.531Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Sorry gua abis beli makan tadi",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:48:08.530Z"
+  },
+  {
+    "_id": "1778845700307_9ayric",
+    "createdAt": "2026-05-15T11:48:20.307Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "no worries. makan apa lu tadi? semoga enak.\nsekarang tinggal siap-siap buat gym kan? jangan lupa pemanasan dulu sebelum hajar beban berat buat back sama biceps.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:48:20.307Z"
+  },
+  {
+    "_id": "1778845702591_2wzq8s",
+    "createdAt": "2026-05-15T11:48:22.591Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Eh iya paf gua bingung dah",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:48:22.591Z"
+  },
+  {
+    "_id": "1778845712266_prfk8a",
+    "createdAt": "2026-05-15T11:48:32.266Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "kenapa bingung? ada apa?\napakah soal menu makanannya, atau malah tiba-tiba bimbang mau latihan apa di gym nanti? cerita sini.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:48:32.265Z"
+  },
+  {
+    "_id": "1778845713858_ytvtwj",
+    "createdAt": "2026-05-15T11:48:33.858Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Eh nanti aja deng gua nanya nya",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:48:33.858Z"
+  },
+  {
+    "_id": "1778845722405_3ilxc6",
+    "createdAt": "2026-05-15T11:48:42.405Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "siap. santai aja. kalau udah siap atau butuh temen curhat pas di gym, kabarin aja.\nfokus dulu makan sama siap-siapnya.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:48:42.405Z"
+  },
+  {
+    "_id": "1778845798669_sh2w7u",
+    "createdAt": "2026-05-15T11:49:58.669Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Ingetin gua buat gym yee",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T11:49:58.669Z"
+  },
+  {
+    "_id": "1778845821658_h1e3y1",
+    "createdAt": "2026-05-15T11:50:21.658Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "siap, gua ingetin. jangan lupa gaskeun latihan back sama biceps nya nanti.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T11:50:21.658Z"
+  },
+  {
+    "_id": "1778851272093_opb3z7",
+    "createdAt": "2026-05-15T13:21:12.093Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "oii paf",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:21:12.092Z"
+  },
+  {
+    "_id": "1778851278524_u285d5",
+    "createdAt": "2026-05-15T13:21:18.524Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Yo, ada apa? Butuh bantuan coding atau analisis?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:21:18.523Z"
+  },
+  {
+    "_id": "1778851280422_rhmk3y",
+    "createdAt": "2026-05-15T13:21:20.422Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "gua gak jadi gym jir",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:21:20.422Z"
+  },
+  {
+    "_id": "1778851287248_nrj7b0",
+    "createdAt": "2026-05-15T13:21:27.248Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Yah, kenapa? Malas atau ada halangan mendadak?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:21:27.247Z"
+  },
+  {
+    "_id": "1778851304441_x5g0zq",
+    "createdAt": "2026-05-15T13:21:44.441Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "malem ini gua gak jadi gym, lu tau lahh gua tidur nya hari ini cuma 3 jam jir lah...",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:21:44.440Z"
+  },
+  {
+    "_id": "1778851311843_tk5q83",
+    "createdAt": "2026-05-15T13:21:51.843Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Wajar lah. Tidur dulu, bro. Jangan maksa.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:21:51.842Z"
+  },
+  {
+    "_id": "1778851329304_ku558o",
+    "createdAt": "2026-05-15T13:22:09.304Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "jadi gak apa kan kalo gua skip hari ini?",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:22:09.304Z"
+  },
+  {
+    "_id": "1778851334254_8jez96",
+    "createdAt": "2026-05-15T13:22:14.254Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Wajar lah. Tidur dulu, bro. Jangan maksa.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:22:14.254Z"
+  },
+  {
+    "_id": "1778851336761_090px0",
+    "createdAt": "2026-05-15T13:22:16.761Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "jujur gua berasa bersalah si",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:22:16.760Z"
+  },
+  {
+    "_id": "1778851343853_6l1q45",
+    "createdAt": "2026-05-15T13:22:23.853Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Gak usah. Istirahat itu bagian dari progress.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:22:23.853Z"
+  },
+  {
+    "_id": "1778851357537_ofchgu",
+    "createdAt": "2026-05-15T13:22:37.537Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "barusan gua abis selesai makan malem'",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:22:37.537Z"
+  },
+  {
+    "_id": "1778851363647_3eegft",
+    "createdAt": "2026-05-15T13:22:43.647Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Enak. Sekarang fokus tidur, jangan main HP.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:22:43.647Z"
+  },
+  {
+    "_id": "1778851378334_s6dx20",
+    "createdAt": "2026-05-15T13:22:58.334Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "baru jam berapa ini jir cepet amat tidur sekarang",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:22:58.333Z"
+  },
+  {
+    "_id": "1778851385244_bsnmu2",
+    "createdAt": "2026-05-15T13:23:05.244Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Jam berapa sekarang? Kalau masih awal, santai dulu bentar.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:23:05.244Z"
+  },
+  {
+    "_id": "1778851405123_u6pibz",
+    "createdAt": "2026-05-15T13:23:25.123Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "yehh pake nanya, sekarang kan jam 20:23 WIB di bekasi",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:23:25.122Z"
+  },
+  {
+    "_id": "1778851411936_lnzxdb",
+    "createdAt": "2026-05-15T13:23:31.936Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Masih awal banget. Santai dulu, jangan langsung tidur.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:23:31.936Z"
+  },
+  {
+    "_id": "1778851424483_sh4oyt",
+    "createdAt": "2026-05-15T13:23:44.483Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "iyee gua si ada rencana pengen mandi",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:23:44.483Z"
+  },
+  {
+    "_id": "1778851431820_csulg2",
+    "createdAt": "2026-05-15T13:23:51.820Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Mandi air hangat biar rileks, terus langsung tidur.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:23:51.819Z"
+  },
+  {
+    "_id": "1778851444253_jz4fsc",
+    "createdAt": "2026-05-15T13:24:04.253Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "tapi sebelum itu ngapain yaa enak nya",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:24:04.253Z"
+  },
+  {
+    "_id": "1778851452788_3zwnid",
+    "createdAt": "2026-05-15T13:24:12.788Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Main gitar bentar atau dengerin ROC sambil santai.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:24:12.788Z"
+  },
+  {
+    "_id": "1778851599808_u2zb2v",
+    "createdAt": "2026-05-15T13:26:39.808Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "hmmmmm",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:26:39.806Z"
+  },
+  {
+    "_id": "1778851607477_p3w2c7",
+    "createdAt": "2026-05-15T13:26:47.477Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Atau scroll saham bluechip sebentar? Jangan lama-lama.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:26:47.477Z"
+  },
+  {
+    "_id": "1778852195426_gd2i2o",
+    "createdAt": "2026-05-15T13:36:35.426Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "gak tau jangan bahas saham",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:36:35.426Z"
+  },
+  {
+    "_id": "1778852198144_jyom6g",
+    "createdAt": "2026-05-15T13:36:38.144Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "mending ngapain yakk",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:36:38.143Z"
+  },
+  {
+    "_id": "1778852202409_4ifl7b",
+    "createdAt": "2026-05-15T13:36:42.409Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Oke, skip saham. Main gitar aja biar rileks.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:36:42.409Z"
+  },
+  {
+    "_id": "1778852211490_vxhzx2",
+    "createdAt": "2026-05-15T13:36:51.490Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Mandi air hangat, terus langsung tidur.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:36:51.490Z"
+  },
+  {
+    "_id": "1778852379086_2ptr1m",
+    "createdAt": "2026-05-15T13:39:39.086Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "oyy paf ntar ingetin gua mau mandi yakk abis itu kasih gua schedule abis mandi mau ngapain",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:39:39.085Z"
+  },
+  {
+    "_id": "1778852385506_fa5wey",
+    "createdAt": "2026-05-15T13:39:45.506Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Siap. Nanti gua ingetin. Abis mandi kita bahas jadwal lu.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:39:45.505Z"
+  },
+  {
+    "_id": "1778852413336_lkonok",
+    "createdAt": "2026-05-15T13:40:13.336Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "okeyy",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:40:13.335Z"
+  },
+  {
+    "_id": "1778852419718_30e9tk",
+    "createdAt": "2026-05-15T13:40:19.718Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Mantap. Gua standby sini ya.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:40:19.718Z"
+  },
+  {
+    "_id": "1778852836152_uivq4r",
+    "createdAt": "2026-05-15T13:47:16.152Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Oiyaa",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:47:16.152Z"
+  },
+  {
+    "_id": "1778852839534_pijvro",
+    "createdAt": "2026-05-15T13:47:19.534Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Ngapain ya",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:47:19.533Z"
+  },
+  {
+    "_id": "1778852843240_9e1dk1",
+    "createdAt": "2026-05-15T13:47:23.240Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Lu udah mandi? Kalo udah, gua siapin jadwal malam ini.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:47:23.239Z"
+  },
+  {
+    "_id": "1778852848459_319zid",
+    "createdAt": "2026-05-15T13:47:28.459Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Gitar dulu, terus riset saham bluechip. Santai tapi produktif.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:47:28.458Z"
+  },
+  {
+    "_id": "1778852860406_9a4m7y",
+    "createdAt": "2026-05-15T13:47:40.406Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Jangan gitar dehhh",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:47:40.405Z"
+  },
+  {
+    "_id": "1778852866237_4ufc97",
+    "createdAt": "2026-05-15T13:47:46.237Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Oke skip gitar. Fokus riset saham bluechip aja malam ini?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:47:46.236Z"
+  },
+  {
+    "_id": "1778852881248_sq1bey",
+    "createdAt": "2026-05-15T13:48:01.248Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Itu juga jangan dehh",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:48:01.247Z"
+  },
+  {
+    "_id": "1778852888319_nuwzrb",
+    "createdAt": "2026-05-15T13:48:08.319Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Yaudah santai aja. Nonton film atau scroll sosmed?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:48:08.318Z"
+  },
+  {
+    "_id": "1778852903725_qefe8o",
+    "createdAt": "2026-05-15T13:48:23.725Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Scroll sosmed boleh tuhh",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:48:23.724Z"
+  },
+  {
+    "_id": "1778852909958_pom0nr",
+    "createdAt": "2026-05-15T13:48:29.958Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Siap. Scroll sosmed santai sambil rebahan. Enjoy your night, Fie.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:48:29.958Z"
+  },
+  {
+    "_id": "1778852925103_idg2d7",
+    "createdAt": "2026-05-15T13:48:45.103Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Ogrhhyy",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T13:48:45.102Z"
+  },
+  {
+    "_id": "1778852931389_ndcrcg",
+    "createdAt": "2026-05-15T13:48:51.389Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Sip. Enjoy scrolling-nya, Fie.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T13:48:51.388Z"
+  },
+  {
+    "_id": "1778881129616_fczkfb",
+    "createdAt": "2026-05-15T21:38:49.616Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "gua tidur semalem jam 9 an keren kannnn",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:38:49.616Z"
+  },
+  {
+    "_id": "1778881135758_cfl9qh",
+    "createdAt": "2026-05-15T21:38:55.758Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Keren banget. Tidur awal emang sehat.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:38:55.757Z"
+  },
+  {
+    "_id": "1778881142609_esra7w",
+    "createdAt": "2026-05-15T21:39:02.609Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "iyalahhh",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:39:02.609Z"
+  },
+  {
+    "_id": "1778881148200_57exd5",
+    "createdAt": "2026-05-15T21:39:08.200Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Mantap. Badan jadi fresh kan hari ini?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:39:08.200Z"
+  },
+  {
+    "_id": "1778881157820_ixla9c",
+    "createdAt": "2026-05-15T21:39:17.820Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "gua bangun jam 4 subuh",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:39:17.820Z"
+  },
+  {
+    "_id": "1778881163810_q68q4e",
+    "createdAt": "2026-05-15T21:39:23.810Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Wih, produktif banget. Lu ngapain aja?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:39:23.809Z"
+  },
+  {
+    "_id": "1778881188778_4wsg8r",
+    "createdAt": "2026-05-15T21:39:48.778Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "yap badan jadi fit banget cuy aslii",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:39:48.778Z"
+  },
+  {
+    "_id": "1778881194966_f5b6aa",
+    "createdAt": "2026-05-15T21:39:54.966Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Mantap. Lanjutin rutinitas ini biar konsisten.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:39:54.966Z"
+  },
+  {
+    "_id": "1778881235567_6qtlmc",
+    "createdAt": "2026-05-15T21:40:35.567Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "hari inikan gua mau ngegym pagi jam 7 an terusss hmm ngapain lagi yaaa",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:40:35.566Z"
+  },
+  {
+    "_id": "1778881242378_xs6mo6",
+    "createdAt": "2026-05-15T21:40:42.378Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Focus upper chest pake alat lu.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:40:42.377Z"
+  },
+  {
+    "_id": "1778881258282_xhv6vz",
+    "createdAt": "2026-05-15T21:40:58.282Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "iya iya gua udah tau jadwal gym gua tenangg",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:40:58.282Z"
+  },
+  {
+    "_id": "1778881265647_kv5evw",
+    "createdAt": "2026-05-15T21:41:05.647Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Siap. Abis gym lu ngapain?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:41:05.647Z"
+  },
+  {
+    "_id": "1778881275658_6j2shg",
+    "createdAt": "2026-05-15T21:41:15.658Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "ya gatau jirr ngapain yak",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:41:15.657Z"
+  },
+  {
+    "_id": "1778881282803_0qgs8h",
+    "createdAt": "2026-05-15T21:41:22.803Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Santai aja. Ntar sore cek portofolio saham?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:41:22.803Z"
+  },
+  {
+    "_id": "1778881302726_c0chve",
+    "createdAt": "2026-05-15T21:41:42.726Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "jangan terlalu santai gak si, guakan mau produktif.",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:41:42.725Z"
+  },
+  {
+    "_id": "1778881310220_5lzxcy",
+    "createdAt": "2026-05-15T21:41:50.220Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Siap. Abis gym belajar coding atau analisis saham?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:41:50.220Z"
+  },
+  {
+    "_id": "1778881323566_n10oyp",
+    "createdAt": "2026-05-15T21:42:03.566Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "hmmmm",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:42:03.566Z"
+  },
+  {
+    "_id": "1778881330753_0h4bxi",
+    "createdAt": "2026-05-15T21:42:10.753Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Analisis saham bluechip aja. Lebih cuan.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:42:10.753Z"
+  },
+  {
+    "_id": "1778881533626_u43bc9",
+    "createdAt": "2026-05-15T21:45:33.626Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "jangan saham dulu dehh gua pusing sama stocks di indonesia.",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:45:33.624Z"
+  },
+  {
+    "_id": "1778881540563_xg261w",
+    "createdAt": "2026-05-15T21:45:40.563Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Oke skip. Belajar skill baru atau coding aja?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:45:40.562Z"
+  },
+  {
+    "_id": "1778881554831_3w8nf2",
+    "createdAt": "2026-05-15T21:45:54.831Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "NAHHHH skill baru. emang apa aja skill baru?",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:45:54.831Z"
+  },
+  {
+    "_id": "1778881562339_9t63kt",
+    "createdAt": "2026-05-15T21:46:02.339Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Coding Python, editing video, atau digital marketing.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:46:02.339Z"
+  },
+  {
+    "_id": "1778881581895_oi9p0x",
+    "createdAt": "2026-05-15T21:46:21.895Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "coding python. project apa yang seru?",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:46:21.894Z"
+  },
+  {
+    "_id": "1778881588242_avdmf3",
+    "createdAt": "2026-05-15T21:46:28.242Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Bikin bot trading atau auto-post Instagram.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:46:28.242Z"
+  },
+  {
+    "_id": "1778881606899_56ugh2",
+    "createdAt": "2026-05-15T21:46:46.899Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "buset bot trading?? gila lu",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:46:46.899Z"
+  },
+  {
+    "_id": "1778881614374_oa00i6",
+    "createdAt": "2026-05-15T21:46:54.374Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Seru kan? Belajar logic sambil cari cuan.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:46:54.374Z"
+  },
+  {
+    "_id": "1778881630979_v65aqo",
+    "createdAt": "2026-05-15T21:47:10.979Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "gimana cara nya python tau trading nantinya",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:47:10.978Z"
+  },
+  {
+    "_id": "1778881637979_7afu9n",
+    "createdAt": "2026-05-15T21:47:17.979Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Pake API broker buat data real-time.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:47:17.979Z"
+  },
+  {
+    "_id": "1778881664652_qv8coz",
+    "createdAt": "2026-05-15T21:47:44.652Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "aduh API kan bayar",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:47:44.652Z"
+  },
+  {
+    "_id": "1778881672047_5w0v1t",
+    "createdAt": "2026-05-15T21:47:52.047Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Pake data Yahoo Finance gratis dulu.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:47:52.046Z"
+  },
+  {
+    "_id": "1778881693060_jzs050",
+    "createdAt": "2026-05-15T21:48:13.060Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "ada limit nya itu",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:48:13.060Z"
+  },
+  {
+    "_id": "1778881700098_gsajvi",
+    "createdAt": "2026-05-15T21:48:20.098Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Iya, tapi cukup buat belajar logic dasar.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:48:20.097Z"
+  },
+  {
+    "_id": "1778881708570_afa9ay",
+    "createdAt": "2026-05-15T21:48:28.570Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "emang limit nya berapa?",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:48:28.569Z"
+  },
+  {
+    "_id": "1778881715369_6u5201",
+    "createdAt": "2026-05-15T21:48:35.369Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Sekitar 2000 request per hari. Cukup kok.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:48:35.368Z"
+  },
+  {
+    "_id": "1778881735235_b4en4l",
+    "createdAt": "2026-05-15T21:48:55.235Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "per hari? riset lagi gak",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T21:48:55.235Z"
+  },
+  {
+    "_id": "1778881807431_xlodxl",
+    "createdAt": "2026-05-15T21:50:07.431Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "❌ Maaf, AI sedang tidak bisa diakses saat ini.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T21:50:07.430Z"
+  },
+  {
+    "_id": "1778883498033_03q6h1",
+    "createdAt": "2026-05-15T22:18:18.033Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "uyy met pagiii",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:18:18.032Z"
+  },
+  {
+    "_id": "1778883504366_69q5sg",
+    "createdAt": "2026-05-15T22:18:24.366Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Pagi. Ada rencana apa hari ini?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:18:24.366Z"
+  },
+  {
+    "_id": "1778883510367_d7eizz",
+    "createdAt": "2026-05-15T22:18:30.367Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "jam 5 subuh ini woilah wkwkw",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:18:30.367Z"
+  },
+  {
+    "_id": "1778883516037_477vxc",
+    "createdAt": "2026-05-15T22:18:36.037Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Woles, mumpung sepi. Mau ngapain dulu?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:18:36.036Z"
+  },
+  {
+    "_id": "1778883524356_xd255o",
+    "createdAt": "2026-05-15T22:18:44.356Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "di hari sabtu ini kita harus produktif yakann",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:18:44.356Z"
+  },
+  {
+    "_id": "1778883530672_8p593e",
+    "createdAt": "2026-05-15T22:18:50.672Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Setuju. Gym jam 7 udah fix kan?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:18:50.671Z"
+  },
+  {
+    "_id": "1778883549317_nf21m1",
+    "createdAt": "2026-05-15T22:19:09.317Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "yoii gym jam 7, tapi abis itu ngapain yak bingung gua..",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:19:09.316Z"
+  },
+  {
+    "_id": "1778883555695_09mgdz",
+    "createdAt": "2026-05-15T22:19:15.695Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Review portofolio saham atau latihan gitar?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:19:15.694Z"
+  },
+  {
+    "_id": "1778883570378_0spti5",
+    "createdAt": "2026-05-15T22:19:30.378Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "aduhhh lupakan saham gua mau liburan jir",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:19:30.377Z"
+  },
+  {
+    "_id": "1778883576886_gmxld7",
+    "createdAt": "2026-05-15T22:19:36.886Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Oke, skip saham. Mau liburan kemana?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:19:36.885Z"
+  },
+  {
+    "_id": "1778883588403_lgzpor",
+    "createdAt": "2026-05-15T22:19:48.403Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "emmm maksud nya mau nyantai gituuu",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:19:48.402Z"
+  },
+  {
+    "_id": "1778883594853_doyj31",
+    "createdAt": "2026-05-15T22:19:54.853Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Boleh. Nonton film atau main gitar aja?",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:19:54.853Z"
+  },
+  {
+    "_id": "1778883607211_shilgt",
+    "createdAt": "2026-05-15T22:20:07.211Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "gatau mau ngapain abis ngegym yakk",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:20:07.210Z"
+  },
+  {
+    "_id": "1778883613989_cqwwlg",
+    "createdAt": "2026-05-15T22:20:13.989Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Mandi, sarapan enak, terus rebahan dengerin lagu.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:20:13.988Z"
+  },
+  {
+    "_id": "1778883623219_vdmy31",
+    "createdAt": "2026-05-15T22:20:23.219Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "hmmmmmmm. coba lu pikir dehh.",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:20:23.218Z"
+  },
+  {
+    "_id": "1778883630021_2zi99c",
+    "createdAt": "2026-05-15T22:20:30.021Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Coba cari cafe baru buat nongkrong santai.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:20:30.020Z"
+  },
+  {
+    "_id": "1778884079820_ernbuo",
+    "createdAt": "2026-05-15T22:27:59.820Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Apakekk lu mikirr",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:27:59.819Z"
+  },
+  {
+    "_id": "1778884086201_yivrgp",
+    "createdAt": "2026-05-15T22:28:06.201Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Cari cafe cozy buat nongkrong santai abis gym.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:28:06.200Z"
+  },
+  {
+    "_id": "1778884101831_muha3a",
+    "createdAt": "2026-05-15T22:28:21.831Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Yang mahal gitu??",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:28:21.830Z"
+  },
+  {
+    "_id": "1778884107902_bhj82u",
+    "createdAt": "2026-05-15T22:28:27.902Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Enggak, cari yang affordable tapi vibes-nya enak.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:28:27.902Z"
+  },
+  {
+    "_id": "1778884128320_odxt6k",
+    "createdAt": "2026-05-15T22:28:48.320Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Lu liat aja saldo gua berapa jirr.. masa iya jajan di cafe.",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:28:48.320Z"
+  },
+  {
+    "_id": "1778884136275_zzjciy",
+    "createdAt": "2026-05-15T22:28:56.275Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Yaudah, bikin kopi sendiri di rumah aja. Hemat.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:28:56.275Z"
+  },
+  {
+    "_id": "1778884155977_8s3gj5",
+    "createdAt": "2026-05-15T22:29:15.977Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Yahh masa di rumah sih",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:29:15.976Z"
+  },
+  {
+    "_id": "1778884162655_qof464",
+    "createdAt": "2026-05-15T22:29:22.655Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Yaudah jalan kaki keliling komplek aja.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:29:22.654Z"
+  },
+  {
+    "_id": "1778884170052_lvrjx1",
+    "createdAt": "2026-05-15T22:29:30.052Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Bosenn",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:29:30.050Z"
+  },
+  {
+    "_id": "1778884177204_3ebl1s",
+    "createdAt": "2026-05-15T22:29:37.204Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Nonton film series di rumah aja biar hemat.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:29:37.203Z"
+  },
+  {
+    "_id": "1778884193363_xvxxwy",
+    "createdAt": "2026-05-15T22:29:53.363Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Bosennnn mau hal baru diluar",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:29:53.362Z"
+  },
+  {
+    "_id": "1778884200486_1x2kxy",
+    "createdAt": "2026-05-15T22:30:00.486Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Coba ke taman kota dekat rumah. Gratis, segar.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:30:00.485Z"
+  },
+  {
+    "_id": "1778884223582_t5f2ej",
+    "createdAt": "2026-05-15T22:30:23.582Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Di bekasi mana ada gitu jir",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:30:23.582Z"
+  },
+  {
+    "_id": "1778884230702_s1y72r",
+    "createdAt": "2026-05-15T22:30:30.702Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Coba ke Summarecon Mall atau Grand Metropolitan.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:30:30.701Z"
+  },
+  {
+    "_id": "1778884243406_x8fi8g",
+    "createdAt": "2026-05-15T22:30:43.406Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Summarecon mall ngapain?",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:30:43.406Z"
+  },
+  {
+    "_id": "1778884249992_u99t0m",
+    "createdAt": "2026-05-15T22:30:49.992Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Window shopping, cari AC, gratis.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:30:49.991Z"
+  },
+  {
+    "_id": "1778884271597_ujargb",
+    "createdAt": "2026-05-15T22:31:11.597Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Gua gak ada duit buat shopping woilahh ini tanggal tua",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:31:11.594Z"
+  },
+  {
+    "_id": "1778884278801_20x1sb",
+    "createdAt": "2026-05-15T22:31:18.801Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Window shopping doang, gak usah beli.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:31:18.801Z"
+  },
+  {
+    "_id": "1778884293206_ibd6hb",
+    "createdAt": "2026-05-15T22:31:33.206Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Ohhh liat liat?",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:31:33.205Z"
+  },
+  {
+    "_id": "1778884300284_v0vame",
+    "createdAt": "2026-05-15T22:31:40.284Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Iya, liat-liat doang. Hemat, dapet AC.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:31:40.283Z"
+  },
+  {
+    "_id": "1778884326710_yxszhz",
+    "createdAt": "2026-05-15T22:32:06.710Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Jir malu maluin dong liat doang gak beli😫",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:32:06.709Z"
+  },
+  {
+    "_id": "1778884333866_52vdb4",
+    "createdAt": "2026-05-15T22:32:13.866Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Gak usah mikirin orang. Lu kan cool.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:32:13.864Z"
+  },
+  {
+    "_id": "1778884389692_glu6t6",
+    "createdAt": "2026-05-15T22:33:09.692Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Kan dibilang bekasi gak ada tamann woiii",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:33:09.691Z"
+  },
+  {
+    "_id": "1778884397228_705rv8",
+    "createdAt": "2026-05-15T22:33:17.228Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Yaudah ke Alun-alun Bekasi aja. Deket, gratis.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:33:17.227Z"
+  },
+  {
+    "_id": "1778884429124_rigkhj",
+    "createdAt": "2026-05-15T22:33:49.124Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Panass, banyak Asep disana polusi gede...",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:33:49.123Z"
+  },
+  {
+    "_id": "1778884436285_t6in0p",
+    "createdAt": "2026-05-15T22:33:56.285Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Yaudah mending stay di kamar, AC nyala, dengerin gitar.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:33:56.284Z"
+  },
+  {
+    "_id": "1778884450260_jywlcg",
+    "createdAt": "2026-05-15T22:34:10.260Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Yahh dikamar lagii bosenn",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:34:10.259Z"
+  },
+  {
+    "_id": "1778884457461_tlzrb2",
+    "createdAt": "2026-05-15T22:34:17.461Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Coba ke Bekasi Cyber Park. AC dingin, masuk gratis.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:34:17.461Z"
+  },
+  {
+    "_id": "1778884472073_e51eiq",
+    "createdAt": "2026-05-15T22:34:32.073Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Hmmmmm... Ngapain yak.",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:34:32.073Z"
+  },
+  {
+    "_id": "1778884479096_h14f6i",
+    "createdAt": "2026-05-15T22:34:39.096Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Liat gadget orang, cari inspirasi gratisan.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:34:39.095Z"
+  },
+  {
+    "_id": "1778884535549_880mxf",
+    "createdAt": "2026-05-15T22:35:35.549Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Bingung",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:35:35.547Z"
+  },
+  {
+    "_id": "1778884541624_e2v74r",
+    "createdAt": "2026-05-15T22:35:41.624Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "BCP kan banyak spot foto estetik. Gratis kok.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:35:41.623Z"
+  },
+  {
+    "_id": "1778884671340_zssr76",
+    "createdAt": "2026-05-15T22:37:51.340Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Outfit nya apa kalo ke bcp",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:37:51.339Z"
+  },
+  {
+    "_id": "1778884677440_sy77a5",
+    "createdAt": "2026-05-15T22:37:57.440Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Outfit gym aja. Casual, nyaman, gak ribet.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:37:57.439Z"
+  },
+  {
+    "_id": "1778884708365_uuirgm",
+    "createdAt": "2026-05-15T22:38:28.365Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Buset outfit gym yang bener ajeee, gua aja bb 65 tb 169. Keliatan kurus ntar jir",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:38:28.364Z"
+  },
+  {
+    "_id": "1778884714980_5zebwe",
+    "createdAt": "2026-05-15T22:38:34.980Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Pake hoodie longgar. Biar keliatan stylish, nutupin kurus.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:38:34.979Z"
+  },
+  {
+    "_id": "1778884746673_9f4p98",
+    "createdAt": "2026-05-15T22:39:06.673Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Hoodie keliatan alay gak si",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:39:06.672Z"
+  },
+  {
+    "_id": "1778884754397_wbnjuu",
+    "createdAt": "2026-05-15T22:39:14.397Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Gak alay kalau modelnya polos. Tetep keliatan cool.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:39:14.396Z"
+  },
+  {
+    "_id": "1778884784965_htx2vq",
+    "createdAt": "2026-05-15T22:39:44.965Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Alay itu mahh",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:39:44.965Z"
+  },
+  {
+    "_id": "1778884791481_ehtcy6",
+    "createdAt": "2026-05-15T22:39:51.481Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Yaudah kemeja flanel longgar. Tetep casual, gak alay.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:39:51.480Z"
+  },
+  {
+    "_id": "1778884800789_hm8od7",
+    "createdAt": "2026-05-15T22:40:00.789Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Di bekasi jadi alay, soal nya banyak yang make kaya gitu jir.",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:40:00.785Z"
+  },
+  {
+    "_id": "1778884808825_y8jwft",
+    "createdAt": "2026-05-15T22:40:08.825Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Pake kaos polos oversize + celana cargo. Simple, aman.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:40:08.824Z"
+  },
+  {
+    "_id": "1778884828158_yq214y",
+    "createdAt": "2026-05-15T22:40:28.158Z",
+    "jid": "225545979723871@lid",
+    "role": "user",
+    "text": "Hmmmmm",
+    "sender": "225545979723871@lid",
+    "timestamp": "2026-05-15T22:40:28.157Z"
+  },
+  {
+    "_id": "1778884834103_pkyuqr",
+    "createdAt": "2026-05-15T22:40:34.103Z",
+    "jid": "225545979723871@lid",
+    "role": "bot",
+    "text": "Itu aman. Gak alay, gak kurus kering.",
+    "sender": "bot",
+    "timestamp": "2026-05-15T22:40:34.102Z"
+  }
+]

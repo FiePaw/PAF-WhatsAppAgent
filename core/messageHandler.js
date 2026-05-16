@@ -7,6 +7,7 @@ import { askAI } from '../services/aiService.js';
 import { getPersona } from '../services/personaService.js';
 import { handleTriggeredPlugin } from './triggeredPluginHandler.js';
 import { getGroupChannel, getGroupPersona } from '../services/groupService.js';
+import { recordMessage } from '../services/chatHistoryService.js';
 import logger from '../utils/logger.js';
 
 /**
@@ -232,6 +233,11 @@ export async function handleMessage(sock, msg, plugins) {
   // Jika AI selesai duluan dan intent belum ada hasilnya → kirim AI reply,
   // intent tetap jalan di background untuk konteks & side-effect (inject ke chat session).
   if (owner) {
+    // Catat pesan natural owner ke chatHistory (bukan command, bukan gambar kosong)
+    if (text.trim()) {
+      recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
+    }
+
     const ctx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply, attachments };
     const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
@@ -270,6 +276,8 @@ export async function handleMessage(sock, msg, plugins) {
           aiReplySent = true;
           if (aiReply) {
             await reply(aiReply);
+            // Catat balasan bot ke chatHistory
+            recordMessage({ jid, role: 'bot', text: aiReply, sender: 'bot' }).catch(() => {});
           } else {
             await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
           }
@@ -293,9 +301,16 @@ export async function handleMessage(sock, msg, plugins) {
   // ─── Non-owner: AI chat saja ─────────────────────────────────────────────
   const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
+  // Catat pesan user biasa ke chatHistory
+  if (text.trim()) {
+    recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
+  }
+
   try {
     const aiReply = await askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model });
     await reply(aiReply);
+    // Catat balasan bot ke chatHistory
+    recordMessage({ jid, role: 'bot', text: aiReply, sender: 'bot' }).catch(() => {});
   } catch (err) {
     logger.error({ sender, err: err.message }, 'Error saat request ke AI');
     await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
