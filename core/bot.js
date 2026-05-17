@@ -16,7 +16,8 @@ import { warmupOwnerSession } from '../services/aiService.js';
 import { getPersona } from '../services/personaService.js';
 import { listGroupsWithPersona } from '../services/groupService.js';
 import { initProactiveService } from '../services/proactiveService.js';
-import { pruneAllOldMessages } from '../services/chatHistoryService.js';
+import { pruneAllOldMessages, getAllKnownJids } from '../services/chatHistoryService.js';
+import { updatePresence } from '../services/presenceService.js';
 import cronService from '../services/cronService.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
@@ -161,15 +162,24 @@ export async function startBot() {
       logger.info('📅 Semua cron job dijalankan');
 
       // ── Init proactive service ────────────────────────────────────────────
-      // Cleanup chatHistory lama lalu daftarkan cron job analisa per jam
+      // Cleanup chatHistory lama, ambil SEMUA JID yang pernah dikenal (persistent)
+      // untuk subscribe presence — bukan hanya yang aktif 2 hari terakhir.
       await pruneAllOldMessages();
-      initProactiveService();
-      logger.info('🤖 Proactive service aktif');
+      const knownJids = getAllKnownJids();
+      await initProactiveService(knownJids);
+      logger.info({ knownJids: knownJids.length }, '🤖 Proactive service aktif');
     }
   });
 
   // ─── Simpan kredensial setiap update ─────────────────────────────────────
   sock.ev.on('creds.update', saveCreds);
+
+  // ─── Handle presence update ──────────────────────────────────────────────
+  sock.ev.on('presence.update', ({ id, presences }) => {
+    updatePresence(id, presences).catch((err) =>
+      logger.warn({ id, err: err.message }, '⚠️ Gagal update presence')
+    );
+  });
 
   // ─── Handle pesan masuk ──────────────────────────────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {

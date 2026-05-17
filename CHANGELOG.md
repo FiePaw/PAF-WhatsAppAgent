@@ -5,6 +5,173 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.4.0] — 2026-05-17
+
+### Fixed
+- `services/proactiveService.js` — inject konteks hasil analisa sebelumnya selalu diarahkan ke session owner, padahal JID yang dianalisa bisa saja user biasa. Sekarang inject diarahkan ke session JID yang dianalisa itu sendiri (`jid` bukan `ownerJid`). Jika JID yang dianalisa adalah owner, perilaku tidak berubah. `isOwnerJid` dihitung dengan membandingkan `jid === ownerJid` dan diteruskan ke `getPersona()` agar persona yang digunakan tetap sesuai.
+
+### Behavior
+- Sebelumnya: semua hasil analisa proactive selalu diinjeksi ke session owner, sehingga sesi chat user biasa tidak pernah mendapat konteks proactive dan session owner menerima konteks yang tidak relevan.
+- Sekarang: hasil analisa diinjeksi ke session JID target yang sesuai — user biasa mendapat konteksnya sendiri, owner mendapat konteksnya sendiri.
+
+---
+
+## [3.3.0] — 2026-05-17
+
+### Added
+- `services/aiService.js` — fungsi baru `describeImage({ jid, attachments, caption })`: kirim gambar (base64) ke Qwen vision menggunakan session terpisah (`forceNew: true`, jid unik `image_desc_${jid}_${Date.now()}`). Qwen mendeskripsikan isi gambar dalam 2–4 kalimat bahasa Indonesia — objek, suasana, dan konteks keseluruhan. Return `string` deskripsi atau `null` jika gagal. Session yang digunakan tidak disimpan ke `sessionStore` sehingga tidak mencemari session chat user/owner.
+- `core/messageHandler.js` — helper baru `recordImageToHistory({ jid, sender, attachments, caption })`: memanggil `describeImage()` lalu menyimpan hasilnya ke `chatHistory` sebagai pesan user dengan format `[Gambar (caption: "...")] <deskripsi>` atau `[Gambar] <deskripsi>` jika tidak ada caption. Berjalan fire-and-forget — tidak memblokir proses chat utama.
+
+### Changed
+- `core/messageHandler.js` — import `describeImage` dari `aiService`. Hook `recordImageToHistory` dipasang di dua titik: owner DM (setelah pencatatan teks) dan non-owner DM (setelah pencatatan teks). Gambar yang dikirim user kini memiliki representasi teks di `chatHistory` yang bisa dibaca oleh `proactiveService` saat analisa.
+
+### Behavior
+- Sebelumnya: gambar yang dikirim user tidak tersimpan di `chatHistory` — `proactiveService` tidak mengetahui bahwa user pernah mengirim gambar dan tidak bisa menganalisa konteksnya.
+- Sekarang: setiap gambar yang masuk dideskripsikan oleh Qwen dan hasilnya disimpan ke `chatHistory`. `proactiveService` bisa membaca konteks gambar dari history teks tanpa perlu mengakses gambar aslinya.
+
+### Architecture
+```
+Pesan gambar masuk
+  ↓
+extractImageAttachment() → base64 attachment
+  ↓
+recordImageToHistory() [fire-and-forget]
+  ↓
+describeImage() → session terpisah, forceNew
+  → Qwen vision mendeskripsikan gambar
+  ↓
+recordMessage({ role: 'user', text: '[Gambar] <deskripsi>' })
+  ↓
+chatHistory tersimpan — proactiveService bisa baca konteks
+```
+
+---
+
+## [3.2.0] — 2026-05-17
+
+### Changed
+- `services/chatHistoryService.js` — struktur database diubah dari dua collection terpisah (`chatHistory` + `chatJids`) menjadi satu collection `chatHistory` dengan satu dokumen per JID. Setiap dokumen berisi metadata JID (`firstSeen`, `lastSeen`, `messageCount`) dan array `messages[]` dalam satu tempat — tidak ada risiko inkonsistensi antar collection.
+
+### Architecture
+Struktur dokumen per JID di `data/chatHistory.json`:
+```json
+{
+  "_id": "...",
+  "jid": "628xxx@s.whatsapp.net",
+  "firstSeen": "ISO string",
+  "lastSeen":  "ISO string",
+  "messageCount": 47,
+  "messages": [
+    { "role": "user", "text": "...", "sender": "...", "timestamp": "ISO string" },
+    { "role": "bot",  "text": "...", "sender": "bot", "timestamp": "ISO string" }
+  ]
+}
+```
+
+- `messageCount` mencatat total pesan sepanjang masa (tidak di-reset saat prune) — memberi gambaran historis seberapa aktif kontak.
+- `messages[]` hanya berisi pesan 2 hari terakhir — dipangkas otomatis saat `recordMessage` dan `pruneAllOldMessages`.
+- Dokumen JID tidak pernah dihapus meski `messages[]` kosong — berfungsi sebagai catatan permanen untuk `getAllKnownJids()`.
+- Setiap operasi baca/tulis hanya menyentuh satu dokumen (query by `jid`) — lebih efisien dari scan seluruh collection.
+
+### Behavior
+- Sebelumnya: dua collection terpisah (`chatHistory` untuk pesan, `chatJids` untuk registry JID) yang harus selalu disinkronkan secara manual dan bisa tidak konsisten.
+- Sekarang: satu dokumen per JID, semua data dalam satu tempat, tidak ada risiko tidak sinkron.
+
+---
+
+## [3.1.0] — 2026-05-17
+
+### Changed
+- `services/chatHistoryService.js` — hapus `_knownJids` Set in-memory yang digunakan untuk mendeteksi JID baru. Diganti dengan pengecekan langsung ke database via `isKnownJid(jid)` setiap kali `recordMessage` dipanggil. `registerJid()` melakukan upsert: insert jika JID baru (return `true`), update `lastSeen` dan `messageCount` jika sudah ada (return `false`). Sinyal `true` memicu `onNewJid()` untuk subscribe presence.
+- `core/bot.js` — `initProactiveService` kini dipanggil dengan hasil `getAllKnownJids()` (seluruh JID yang pernah ada di registry) alih-alih `getActiveJids()` (hanya JID aktif 2 hari terakhir). Memastikan semua kontak yang pernah dikenal langsung di-subscribe presence-nya saat bot restart, tanpa bergantung pada retention window chatHistory.
+
+### Behavior
+- Sebelumnya: `_knownJids` Set in-memory reset setiap bot restart — semua JID dianggap "baru" lagi dan subscribe presence ulang. Data yang hilang hanya efek samping yang tidak berbahaya, namun secara arsitektur tidak konsisten karena state ada di dua tempat (memory + DB).
+- Sekarang: deteksi JID baru sepenuhnya berbasis database — tidak ada state in-memory. Bot restart tidak mengubah apapun karena pengetahuan tentang JID yang sudah dikenal tersimpan permanen di DB.
+
+---
+
+## [3.0.0] — 2026-05-17
+
+### Added
+- `services/chatHistoryService.js` — service baru untuk mencatat semua pesan natural (bukan command) per JID ke database. Fungsi utama: `recordMessage({ jid, role, text, sender })`, `getHistory(jid)`, `getActiveJids()`, `getAllKnownJids()`, `getJidSummary(jid)`, `pruneAllOldMessages()`. Retention otomatis 2 hari — pesan lebih lama dibuang saat insert dan saat siklus proactive. Dokumen JID tidak dihapus meski messages kosong.
+- `services/presenceService.js` — service baru untuk melacak status online/offline setiap JID via Baileys presence API. Fungsi: `subscribePresence(jid)`, `subscribeAll(activeJids)`, `updatePresence(id, presences)`, `getPresence(jid)`. Presence dianggap stale jika tidak ada update lebih dari 10 menit (`STALE_THRESHOLD_MS`). Return `{ isOnline, lastKnownPresence, lastSeen, isStale }`.
+- `services/proactiveService.js` — service baru yang berjalan setiap 1 jam via cron `@hourly`. Setiap siklus: cleanup history lama → subscribe presence semua JID aktif → per JID cek jadwal analisa (`isAnalysisAllowed`) → kirim history + status presence ke Qwen → Qwen return JSON keputusan → kirim pesan jika memenuhi syarat → inject konteks ke session JID target → simpan `nextAnalyzeAt`.
+- `core/bot.js` — listener baru `sock.ev.on('presence.update', ...)` untuk memperbarui status presence setiap JID secara real-time.
+
+### Changed
+- `core/messageHandler.js` — tambah import `recordMessage` dari `chatHistoryService`. Hook pencatatan pesan user dipasang di owner DM dan non-owner DM (hanya pesan teks, sebelum proses AI). Hook pencatatan balasan bot dipasang setelah AI reply berhasil dikirim di kedua jalur tersebut.
+- `core/bot.js` — saat `connection.open`: jalankan `pruneAllOldMessages()`, ambil `getAllKnownJids()`, panggil `initProactiveService(knownJids)` untuk subscribe presence dan daftarkan cron job.
+
+### Architecture — Skema Keputusan Qwen (proactiveService)
+```
+┌──────────────┬──────────────────┬────────────────────────────────────────────┐
+│  isOnline    │  shouldSend      │  Tindakan                                  │
+├──────────────┼──────────────────┼────────────────────────────────────────────┤
+│  true        │  true            │  Kirim pesan inisiatif                     │
+│  true        │  false           │  Skip, simpan nextAnalyzeAt                │
+│  false       │  true + urgent   │  Kirim pesan (topik penting)               │
+│  false       │  true (biasa)    │  Skip, simpan nextAnalyzeAt                │
+│  false       │  false           │  Skip, simpan nextAnalyzeAt                │
+│  stale/unkn  │  true + urgent   │  Kirim pesan (perlakukan seperti offline)  │
+│  stale/unkn  │  true (biasa)    │  Skip                                      │
+└──────────────┴──────────────────┴────────────────────────────────────────────┘
+```
+
+### Architecture — JSON Response Qwen
+```json
+{
+  "shouldSend":     true | false,
+  "isUrgent":       true | false,
+  "message":        "pesan yang akan dikirim (string kosong jika shouldSend false)",
+  "reason":         "alasan singkat keputusan",
+  "nextAnalyzeIn":  "30m" | "1h" | "2h" | "3h" | "6h" | "12h" | "24h" | null,
+  "contextSummary": "ringkasan 1-2 kalimat konteks percakapan"
+}
+```
+
+`nextAnalyzeIn` menentukan kapan JID ini boleh dianalisa lagi oleh cron berikutnya. `null` = ikut jadwal default 1 jam. Cron `@hourly` tetap berjalan setiap jam — `isAnalysisAllowed()` yang menjadi penjaga gerbang per JID.
+
+### Behavior
+- Sebelumnya: bot hanya bersifat reaktif — hanya merespons pesan yang masuk.
+- Sekarang: bot bersifat proaktif — setiap jam Qwen menganalisa history percakapan semua JID aktif dan memutuskan apakah perlu mengirim pesan inisiatif, membuka topik baru, atau mengingatkan sesuatu. Keputusan mempertimbangkan status online/offline user, urgency topik, dan jadwal analisa yang Qwen tentukan sendiri.
+
+---
+
+
+
+### Changed
+- `core/messageHandler.js` — alur paralel owner DM dan grup diubah dari `Promise.all` (tunggu keduanya) menjadi `Promise.race` berbasis flag. AI chat diprioritaskan: begitu `askAI` selesai, reply langsung dikirim tanpa menunggu intent detection. Intent detection tetap berjalan di background hingga selesai untuk keperluan side-effect (inject hasil ke chat session di `triggeredPluginHandler`).
+
+### Behavior
+- Sebelumnya: `Promise.all([intentPromise, aiPromise])` — bot menunggu **kedua** proses selesai sebelum mengirim reply apapun. Jika intent detection lambat, AI reply yang sudah siap ikut tertahan.
+- Sekarang: keduanya tetap berjalan paralel, tapi AI reply dikirim segera begitu selesai. Intent detection yang masih berjalan tidak memblokir pengiriman reply.
+
+### Architecture
+Tiga skenario yang di-handle oleh flag `aiReplySent`:
+
+```
+Skenario 1 — AI selesai duluan, intent belum:
+  aiPromise resolve → cek intentPromise: belum settled
+  → kirim AI reply sekarang
+  → intentPromise tetap jalan di background (inject ke chat session)
+
+Skenario 2 — Intent selesai duluan, terdeteksi:
+  intentPromise resolve(true) → set aiReplySent = true
+  → plugin handler sudah kirim reply-nya sendiri
+  → AI reply yang menyusul diabaikan (aiReplySent sudah true)
+
+Skenario 3 — Intent selesai duluan, null (tidak ada intent):
+  intentPromise resolve(false) → tidak ada yang reply
+  → tunggu aiPromise, kirim saat selesai
+```
+
+Flag `aiReplySent` mencegah double-reply jika kedua promise selesai hampir bersamaan. Intent promise selalu di-await sampai selesai (`.catch(() => {})`) meski reply sudah dikirim, agar side-effect inject ke chat session tetap terjadi.
+
+Perubahan ini berlaku untuk dua blok paralel: **owner DM** (`if (owner)`) dan **owner di grup terdaftar**.
+
+---
+
 ## [2.9.0] — 2026-05-15
 
 ### Changed

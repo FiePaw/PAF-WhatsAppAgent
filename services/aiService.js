@@ -300,6 +300,51 @@ export async function listModels() {
 }
 
 /**
+ * Deskripsikan konteks sebuah gambar menggunakan Qwen vision.
+ * Menggunakan session terpisah (forceNew) agar tidak mencemari session chat user/owner.
+ * Hasil deskripsi disimpan ke chatHistory sebagai teks oleh caller.
+ *
+ * @param {object} options
+ * @param {string}  options.jid         - JID pengirim (untuk logging)
+ * @param {Array}   options.attachments - [{ filename, data (base64), mime_type }]
+ * @param {string}  [options.caption]   - caption gambar jika ada (opsional)
+ * @returns {Promise<string|null>} deskripsi gambar dalam bahasa Indonesia, atau null jika gagal
+ */
+export async function describeImage({ jid, attachments, caption }) {
+  const captionNote = caption?.trim()
+    ? `Caption dari pengirim: "${caption.trim()}"\n\n`
+    : '';
+
+  const prompt = `${captionNote}Deskripsikan gambar ini secara lengkap dan jelas. Jelaskan:
+- Apa yang terlihat di gambar (objek, orang, tempat, aktivitas)
+- Suasana atau konteks keseluruhan gambar
+- Informasi penting lain yang relevan dari gambar
+
+Tulis deskripsi dalam Bahasa Indonesia, padat dan informatif (2-4 kalimat).`;
+
+  try {
+    logger.info({ jid, hasCaption: !!caption }, '🖼️ Mendeskripsikan gambar dengan Qwen vision...');
+
+    // Gunakan session terpisah + forceNew agar tidak mengganggu session chat user/owner
+    const { text } = await sendRequest({
+      jid: `image_desc_${jid}_${Date.now()}`,
+      userText: prompt,
+      attachments,
+      forceNew: true,
+      taskType: 'chat',
+    });
+
+    logger.info({ jid }, '✅ Deskripsi gambar selesai');
+    return text;
+  } catch (err) {
+    const status = err.response?.status;
+    const detail = err.response?.data || err.message;
+    logger.error({ jid, status, detail }, '❌ Gagal mendeskripsikan gambar');
+    return null;
+  }
+}
+
+/**
  * Warm-up owner AI session saat bot start.
  * Kirim persona owner sebagai system prompt dengan dummy input ringan.
  * Session ID tersimpan ke sessionStore sehingga percakapan pertama owner

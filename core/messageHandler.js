@@ -3,12 +3,41 @@ import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import config from '../config/config.js';
 import { isOwner, isCommand, parseCommand } from '../utils/helpers.js';
 import { typingDelay } from '../utils/delay.js';
-import { askAI } from '../services/aiService.js';
+import { askAI, describeImage } from '../services/aiService.js';
 import { getPersona } from '../services/personaService.js';
 import { handleTriggeredPlugin } from './triggeredPluginHandler.js';
 import { getGroupChannel, getGroupPersona } from '../services/groupService.js';
 import { recordMessage } from '../services/chatHistoryService.js';
 import logger from '../utils/logger.js';
+
+/**
+ * Jika pesan mengandung gambar, minta Qwen mendeskripsikan gambar tersebut
+ * lalu simpan hasilnya ke chatHistory sebagai pesan user dengan prefix [Gambar].
+ * Berjalan fire-and-forget — tidak memblokir proses chat utama.
+ *
+ * @param {object} options
+ * @param {string} options.jid
+ * @param {string} options.sender
+ * @param {Array}  options.attachments - hasil extractImageAttachment
+ * @param {string} [options.caption]   - caption gambar jika ada
+ */
+async function recordImageToHistory({ jid, sender, attachments, caption }) {
+  if (!attachments?.length) return;
+
+  try {
+    const description = await describeImage({ jid, attachments, caption });
+    if (!description) return;
+
+    // Simpan ke history dengan format jelas: [Gambar] + deskripsi Qwen
+    const captionPart = caption?.trim() ? ` (caption: "${caption.trim()}")` : '';
+    const historyText = `[Gambar${captionPart}] ${description}`;
+
+    await recordMessage({ jid, role: 'user', text: historyText, sender });
+    logger.debug({ jid }, '📸 chatHistory: deskripsi gambar tersimpan');
+  } catch (err) {
+    logger.warn({ jid, err: err.message }, '⚠️ Gagal record gambar ke chatHistory');
+  }
+}
 
 /**
  * Ekstrak gambar dari pesan WhatsApp dan convert ke format attachment untuk aiService.
@@ -233,9 +262,14 @@ export async function handleMessage(sock, msg, plugins) {
   // Jika AI selesai duluan dan intent belum ada hasilnya → kirim AI reply,
   // intent tetap jalan di background untuk konteks & side-effect (inject ke chat session).
   if (owner) {
-    // Catat pesan natural owner ke chatHistory (bukan command, bukan gambar kosong)
+    // Catat pesan teks natural owner ke chatHistory
     if (text.trim()) {
       recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
+    }
+
+    // Jika ada gambar → deskripsikan dan simpan ke chatHistory (fire-and-forget)
+    if (hasImage) {
+      recordImageToHistory({ jid, sender, attachments, caption: text }).catch(() => {});
     }
 
     const ctx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply, attachments };
@@ -301,9 +335,14 @@ export async function handleMessage(sock, msg, plugins) {
   // ─── Non-owner: AI chat saja ─────────────────────────────────────────────
   const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
-  // Catat pesan user biasa ke chatHistory
+  // Catat pesan teks user ke chatHistory
   if (text.trim()) {
     recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
+  }
+
+  // Jika ada gambar → deskripsikan dan simpan ke chatHistory (fire-and-forget)
+  if (hasImage) {
+    recordImageToHistory({ jid, sender, attachments, caption: text }).catch(() => {});
   }
 
   try {
