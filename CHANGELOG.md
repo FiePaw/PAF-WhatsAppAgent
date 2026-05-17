@@ -5,6 +5,89 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [3.7.0] — 2026-05-17
+
+### Changed
+- `core/messageHandler.js` — tambah ekstraksi `contextInfo` dari quoted message (reply WhatsApp). Saat user/owner membalas pesan bot, teks yang dikutip diambil dari `contextInfo?.quotedMessage` dan dibungkus bersama pesan user menjadi `textWithQuoteContext`:
+  ```
+  [Reply pada pesan: "<teks yang dikutip>"]
+  <pesan user>
+  ```
+  Format ini diteruskan ke `askAI()` sebagai `intentText` dan dicatat ke `chatHistory` — sehingga Qwen memahami konteks pesan mana yang sedang dibalas, bukan hanya menerima pesan terisolasi.
+- `core/messageHandler.js` — `contextInfo` diekstrak dari tiga kemungkinan field message: `extendedTextMessage`, `imageMessage`, dan `videoMessage` — menangani semua skenario reply (teks, gambar, video).
+- `core/messageHandler.js` — `recordMessage` untuk owner dan non-owner kini menyimpan `textWithQuoteContext` (bukan `text` mentah) ke `chatHistory`, sehingga riwayat percakapan mencerminkan konteks reply secara akurat.
+
+### Behavior
+- Sebelumnya: saat user membalas pesan bot, Qwen hanya menerima teks baru tanpa tahu pesan mana yang dibalas — respons bisa tidak nyambung jika pesan sebelumnya sudah jauh di atas.
+- Sekarang: Qwen menerima pesan dengan konteks penuh — tahu bahwa user sedang membalas kalimat spesifik dari bot, sehingga respons lebih relevan dan koheren.
+
+---
+
+## [3.6.0] — 2026-05-17
+
+### Changed
+- `services/statusService.js` — `sendMessage` diubah dari pesan biasa menjadi reply status dengan menambahkan `{ quoted: msg }` pada parameter ketiga `sock.sendMessage`. Hasilnya di WhatsApp penerima muncul sebagai **"replied to your status"** lengkap dengan preview status, bukan pesan chat biasa.
+
+### Behavior
+- Sebelumnya: bot mengirim pesan teks biasa ke JID sender — masuk sebagai pesan chat normal tanpa referensi ke status yang diposting.
+- Sekarang: bot merespons langsung ke status — muncul sebagai reply status di WhatsApp sender, lebih natural dan sesuai konteks.
+
+---
+
+## [3.5.0] — 2026-05-17
+
+### Added
+- `services/statusService.js` — service baru untuk memantau dan merespons status WhatsApp (story) dari kontak yang dikenal. Filter utama: hanya JID yang ada di `chatHistory` (via `getAllKnownJids()`) yang diproses — owner maupun user biasa. Tipe status yang didukung: foto, video, teks. Dokumen, sticker, dan tipe lain di-skip.
+- `core/bot.js` — routing baru di event `messages.upsert`: jika `jid === 'status@broadcast'` maka `handleStatus(sock, msg)` dipanggil secara fire-and-forget (`continue` — tidak masuk ke `handleMessage`).
+
+### Logic — Media Handling per Tipe Status
+- **Foto** → `downloadMediaMessage` → base64 → dikirim ke Qwen sebagai attachment visual
+- **Video** → `jpegThumbnail` dari `videoMessage` (preview frame pertama, sudah tersedia di message object tanpa download penuh) → dikirim ke Qwen sebagai attachment JPEG. Jika thumbnail tidak tersedia, lanjut tanpa visual
+- **Teks** → caption/teks status langsung dipakai tanpa attachment
+
+### Logic — Alur per Status
+```
+Status masuk (status@broadcast)
+  ↓
+isKnownContact(senderJid)? → tidak dikenal: skip
+  ↓
+detectStatusType() → unknown: skip
+  ↓
+Download/ekstrak media sesuai tipe
+  ↓
+getHistory(senderJid) — 20 pesan terakhir sebagai konteks
+getPersona(senderJid, isOwner) — persona sesuai JID
+  ↓
+buildStatusPrompt() → kirim ke Qwen (session terpisah status_${senderJid})
+  ↓
+Qwen generate pesan natural 1–3 kalimat
+  ↓
+typingDelay + sendMessage (quoted: msg) → reply status
+  ↓
+recordMessage: [Status foto/video/teks: "caption"] → chatHistory user
+recordMessage: balasan bot → chatHistory bot
+```
+
+### Prompt Design
+Qwen menerima: tipe status + caption + riwayat 20 pesan terakhir dengan kontak + instruksi tone. Instruksi menekankan pesan yang personal (merujuk riwayat jika relevan), tidak generik, dan tidak terlihat seperti bot (1–3 kalimat).
+
+### Behavior
+- Sebelumnya: status WhatsApp dari semua kontak diabaikan (`return` di `messageHandler` untuk `status@broadcast`).
+- Sekarang: status dari kontak yang dikenal (pernah ada di `chatHistory`) direspons secara otomatis dengan pesan yang dianalisa Qwen berdasarkan isi status + konteks percakapan + persona JID. Respons dan konteks status tercatat di `chatHistory` untuk keperluan analisa `proactiveService`.
+
+---
+
+
+
+### Fixed
+- `services/proactiveService.js` — inject konteks hasil analisa sebelumnya selalu diarahkan ke session owner, padahal JID yang dianalisa bisa saja user biasa. Sekarang inject diarahkan ke session JID yang dianalisa itu sendiri (`jid` bukan `ownerJid`). Jika JID yang dianalisa adalah owner, perilaku tidak berubah. `isOwnerJid` dihitung dengan membandingkan `jid === ownerJid` dan diteruskan ke `getPersona()` agar persona yang digunakan tetap sesuai.
+
+### Behavior
+- Sebelumnya: semua hasil analisa proactive selalu diinjeksi ke session owner, sehingga sesi chat user biasa tidak pernah mendapat konteks proactive dan session owner menerima konteks yang tidak relevan.
+- Sekarang: hasil analisa diinjeksi ke session JID target yang sesuai — user biasa mendapat konteksnya sendiri, owner mendapat konteksnya sendiri.
+
+---
+
 ## [3.4.0] — 2026-05-17
 
 ### Fixed

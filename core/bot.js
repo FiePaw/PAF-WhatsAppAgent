@@ -18,6 +18,7 @@ import { listGroupsWithPersona } from '../services/groupService.js';
 import { initProactiveService } from '../services/proactiveService.js';
 import { pruneAllOldMessages, getAllKnownJids } from '../services/chatHistoryService.js';
 import { updatePresence } from '../services/presenceService.js';
+import { handleStatus } from '../services/statusService.js';
 import cronService from '../services/cronService.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
@@ -187,6 +188,16 @@ export async function startBot() {
 
     for (const msg of messages) {
       try {
+        const jid = msg.key.remoteJid;
+
+        // ── Status broadcast → handle via statusService ────────────────────
+        if (jid === 'status@broadcast') {
+          handleStatus(sock, msg).catch((err) =>
+            logger.error({ err: err.message }, '❌ Unhandled error di handleStatus')
+          );
+          continue;
+        }
+
         // Auto read receipt → centang biru
         if (config.autoRead && !msg.key.fromMe) {
           await sock.readMessages([msg.key]);

@@ -95,6 +95,25 @@ export async function handleMessage(sock, msg, plugins) {
   // Pesan tanpa teks dan tanpa gambar → abaikan
   if (!text.trim() && !hasImage) return;
 
+  // ── Ekstrak konteks quoted message (fitur reply WhatsApp) ─────────────────
+  const contextInfo = msg.message?.extendedTextMessage?.contextInfo
+    || msg.message?.imageMessage?.contextInfo
+    || msg.message?.videoMessage?.contextInfo
+    || null;
+
+  const quotedText =
+    contextInfo?.quotedMessage?.conversation ||
+    contextInfo?.quotedMessage?.extendedTextMessage?.text ||
+    contextInfo?.quotedMessage?.imageMessage?.caption ||
+    contextInfo?.quotedMessage?.videoMessage?.caption ||
+    '';
+
+  // Jika ada quoted message, bungkus teks user dengan konteks reply
+  // sehingga Qwen tahu pesan mana yang sedang dibalas
+  const textWithQuoteContext = quotedText.trim()
+    ? `[Reply pada pesan: "${quotedText.trim()}"]\n${text}`
+    : text;
+
   const sender = msg.key.participant || jid;
   const owner = isOwner(sender);
   const isGroup = jid.endsWith('@g.us');
@@ -103,8 +122,9 @@ export async function handleMessage(sock, msg, plugins) {
   // attachments = null jika bukan gambar, array jika ada gambar
   const attachments = hasImage ? await extractImageAttachment(sock, msg) : null;
 
-  // Teks efektif untuk intent detection — placeholder jika gambar tanpa caption
-  const intentText = text.trim() || (hasImage ? '[gambar dikirim]' : '');
+  // Teks efektif untuk intent detection — gunakan konteks reply jika ada,
+  // fallback ke placeholder jika pesan hanya gambar tanpa teks
+  const intentText = textWithQuoteContext.trim() || (hasImage ? '[gambar dikirim]' : '');
 
   // Helper untuk reply dengan typing delay anti-spam
   const reply = async (replyText) => {
@@ -262,9 +282,9 @@ export async function handleMessage(sock, msg, plugins) {
   // Jika AI selesai duluan dan intent belum ada hasilnya → kirim AI reply,
   // intent tetap jalan di background untuk konteks & side-effect (inject ke chat session).
   if (owner) {
-    // Catat pesan teks natural owner ke chatHistory
+    // Catat pesan teks natural owner ke chatHistory (sertakan konteks reply jika ada)
     if (text.trim()) {
-      recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
+      recordMessage({ jid, role: 'user', text: textWithQuoteContext.trim(), sender }).catch(() => {});
     }
 
     // Jika ada gambar → deskripsikan dan simpan ke chatHistory (fire-and-forget)
@@ -335,9 +355,9 @@ export async function handleMessage(sock, msg, plugins) {
   // ─── Non-owner: AI chat saja ─────────────────────────────────────────────
   const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
-  // Catat pesan teks user ke chatHistory
+  // Catat pesan teks user ke chatHistory (sertakan konteks reply jika ada)
   if (text.trim()) {
-    recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
+    recordMessage({ jid, role: 'user', text: textWithQuoteContext.trim(), sender }).catch(() => {});
   }
 
   // Jika ada gambar → deskripsikan dan simpan ke chatHistory (fire-and-forget)
