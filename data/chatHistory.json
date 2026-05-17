@@ -2751,8 +2751,8 @@
     "createdAt": "2026-05-17T10:03:21.050Z",
     "jid": "225545979723871@lid",
     "firstSeen": "2026-05-17T10:03:21.046Z",
-    "lastSeen": "2026-05-17T16:21:26.739Z",
-    "messageCount": 60,
+    "lastSeen": "2026-05-17T16:52:07.343Z",
+    "messageCount": 76,
     "messages": [
       {
         "role": "user",
@@ -3113,8 +3113,104 @@
         "text": "Aamiin. Good vibes banget, Fie. Syukur itu kunci hoki.",
         "sender": "bot",
         "timestamp": "2026-05-17T16:21:26.739Z"
+      },
+      {
+        "role": "user",
+        "text": "Wehh gua jadi pusing gini ya... Aduhh",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:48:48.741Z"
+      },
+      {
+        "role": "bot",
+        "text": "Kenapa Fie? Sakit kepala atau banyak pikiran?",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:48:55.147Z"
+      },
+      {
+        "role": "user",
+        "text": "Gatauu asli pusing jirr...",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:49:06.899Z"
+      },
+      {
+        "role": "bot",
+        "text": "Coba minum air putih dulu, Fie. Istirahat bentar dari layar.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:49:13.631Z"
+      },
+      {
+        "role": "user",
+        "text": "udah minum tapi tetep aja kayak nyut nyutan di kepala",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:49:41.989Z"
+      },
+      {
+        "role": "bot",
+        "text": "Coba tidur sebentar atau pijat pelan. Kalau parah, minum obat sakit kepala.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:49:48.975Z"
+      },
+      {
+        "role": "user",
+        "text": "Hmmm iyakali yaaa",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:50:05.401Z"
+      },
+      {
+        "role": "bot",
+        "text": "Iya, coba rebahan dulu. Jangan dipaksa lanjut kalau emang berat.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:50:12.269Z"
+      },
+      {
+        "role": "user",
+        "text": "Besok senin jir😐😐😐😐😐",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:50:41.021Z"
+      },
+      {
+        "role": "bot",
+        "text": "Sabar Fie. Senin lagi, gaskeun aja.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:50:48.310Z"
+      },
+      {
+        "role": "user",
+        "text": "Wkwkw iya iyaa gaskenn",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:50:57.923Z"
+      },
+      {
+        "role": "bot",
+        "text": "Mantap. Istirahat dulu biar besok fresh lagi.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:51:04.467Z"
+      },
+      {
+        "role": "user",
+        "text": "Sekarang jam 11:52 di bekasi",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:51:25.958Z"
+      },
+      {
+        "role": "bot",
+        "text": "Wah mepet subuh. Buruan tidur biar ga pusing lagi besok.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:51:43.000Z"
+      },
+      {
+        "role": "user",
+        "text": "Tapi gua belom makan malem yang ke dua wkwkk😹",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:52:00.356Z"
+      },
+      {
+        "role": "bot",
+        "text": "Makan cepat deh, Fie. Jangan begadang terus, ntar makin pusing.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:52:07.343Z"
       }
     ],
-    "updatedAt": "2026-05-17T16:21:26.743Z"
+    "updatedAt": "2026-05-17T16:52:07.346Z"
   }
 ]
