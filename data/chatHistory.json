@@ -2751,8 +2751,8 @@
     "createdAt": "2026-05-17T10:03:21.050Z",
     "jid": "225545979723871@lid",
     "firstSeen": "2026-05-17T10:03:21.046Z",
-    "lastSeen": "2026-05-17T16:11:40.076Z",
-    "messageCount": 55,
+    "lastSeen": "2026-05-17T16:21:26.739Z",
+    "messageCount": 60,
     "messages": [
       {
         "role": "user",
@@ -3083,8 +3083,38 @@
         "text": "Iya beneran keren, Fie! Warna earth tone-nya pas banget buat daily wear lo.",
         "sender": "bot",
         "timestamp": "2026-05-17T16:11:40.076Z"
+      },
+      {
+        "role": "bot",
+        "text": "Wkwk, jaket baru langsung dihajar makan enak. Emang harus gitu biar makin puas! 😋",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:20:48.307Z"
+      },
+      {
+        "role": "user",
+        "text": "[Reply pada pesan: \"Wkwk, jaket baru langsung dihajar makan enak. Emang harus gitu biar makin puas! 😋\"]\nOIYALAHHH JELASS hehehee",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:21:07.161Z"
+      },
+      {
+        "role": "user",
+        "text": "Alhamdulillah yaAllah terimakasih udah kasih rezeki ke ayah...",
+        "sender": "225545979723871@lid",
+        "timestamp": "2026-05-17T16:21:18.732Z"
+      },
+      {
+        "role": "bot",
+        "text": "Wkwk, emang paling bener sih. Jaket baru + perut kenyang = happy maksimal.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:21:19.984Z"
+      },
+      {
+        "role": "bot",
+        "text": "Aamiin. Good vibes banget, Fie. Syukur itu kunci hoki.",
+        "sender": "bot",
+        "timestamp": "2026-05-17T16:21:26.739Z"
       }
     ],
-    "updatedAt": "2026-05-17T16:11:40.082Z"
+    "updatedAt": "2026-05-17T16:21:26.743Z"
   }
 ]

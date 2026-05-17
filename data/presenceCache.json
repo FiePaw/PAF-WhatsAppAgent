@@ -3,9 +3,9 @@
     "_id": "1778892099271_tz6r2v",
     "createdAt": "2026-05-16T00:41:39.271Z",
     "jid": "225545979723871@lid",
-    "lastKnownPresence": "available",
-    "lastSeen": null,
-    "updatedAt": "2026-05-17T16:15:03.180Z"
+    "lastKnownPresence": "unavailable",
+    "lastSeen": "2026-05-17T16:22:32.000Z",
+    "updatedAt": "2026-05-17T16:22:32.939Z"
   },
   {
     "_id": "1779006981060_uw53uk",
@@ -13,6 +13,6 @@
     "jid": "42958615220456@lid",
     "lastKnownPresence": "unavailable",
     "lastSeen": null,
-    "updatedAt": "2026-05-17T16:06:58.772Z"
+    "updatedAt": "2026-05-17T16:19:13.276Z"
   }
 ]

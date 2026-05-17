@@ -1,18 +1,19 @@
 // services/proactiveService.js
-// Service analisa chatHistory setiap 1 jam.
-// Qwen memutuskan: apakah perlu kirim pesan, kapan analisa boleh dilakukan lagi,
-// apakah topik cukup penting untuk dikirim meski user offline.
+// Service analisa chatHistory setiap 10 menit (cron @every_10m).
+// isAnalysisAllowed() mengatur per-JID kapan boleh dianalisa berdasarkan nextAnalyzeAt.
+// Qwen memutuskan: apakah perlu kirim pesan, kapan analisa boleh dilakukan lagi.
+// nextAnalyzeIn maksimal 1 jam — Qwen didorong untuk agresif dan responsif.
 //
 // Skema keputusan Qwen:
-// ┌──────────────┬───────────────┬────────────────────────────────────────────┐
-// │  isOnline    │  shouldSend   │  Tindakan                                  │
-// ├──────────────┼───────────────┼────────────────────────────────────────────┤
-// │  true        │  true         │  Kirim pesan                               │
-// │  true        │  false        │  Simpan nextAnalyzeAt, skip                │
-// │  false       │  true+urgent  │  Kirim pesan (topik penting)               │
-// │  false       │  true (biasa) │  Skip, simpan nextAnalyzeAt               │
-// │  false       │  false        │  Skip, simpan nextAnalyzeAt               │
-// └──────────────┴───────────────┴────────────────────────────────────────────┘
+// ┌──────────────┬──────────────────┬────────────────────────────────────────────┐
+// │  isOnline    │  shouldSend      │  Tindakan                                  │
+// ├──────────────┼──────────────────┼────────────────────────────────────────────┤
+// │  true        │  true            │  Kirim pesan inisiatif                     │
+// │  true        │  false           │  Skip, simpan nextAnalyzeAt                │
+// │  false       │  true + urgent   │  Kirim pesan (topik penting)               │
+// │  false       │  true (biasa)    │  Kirim pesan (default agresif)             │
+// │  false       │  false           │  Skip, simpan nextAnalyzeAt                │
+// └──────────────┴──────────────────┴────────────────────────────────────────────┘
 
 import cronService from './cronService.js';
 import { getActiveJids, getHistory, pruneAllOldMessages } from './chatHistoryService.js';
@@ -37,21 +38,27 @@ async function saveState(jid, updates) {
 
 /**
  * Parse nextAnalyzeIn shorthand ke ISO timestamp.
- * Format: "30m" | "1h" | "2h" | "3h" | "6h" | "12h" | "24h" | null
- * null → default 1 jam
+ * Format: "10m" | "15m" | "20m" | "30m" | "45m" | "1h" | null
+ * null → default 15 menit (agresif — cek lagi secepatnya)
+ * Maksimum yang diizinkan: 1 jam. Lebih dari itu di-cap ke 1h.
  */
 function resolveNextAnalyzeAt(nextAnalyzeIn) {
+  const MAX_MS = 60 * 60 * 1000; // cap 1 jam
+
   if (!nextAnalyzeIn) {
-    return new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    return new Date(Date.now() + 15 * 60 * 1000).toISOString(); // default 15m
   }
   const match = nextAnalyzeIn.match(/^(\d+)(m|h)$/);
   if (!match) {
-    logger.warn({ nextAnalyzeIn }, '⚠️ proactiveService: format nextAnalyzeIn tidak dikenal, pakai default 1h');
-    return new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    logger.warn({ nextAnalyzeIn }, '⚠️ proactiveService: format nextAnalyzeIn tidak dikenal, pakai default 15m');
+    return new Date(Date.now() + 15 * 60 * 1000).toISOString();
   }
   const value = parseInt(match[1]);
   const unit = match[2];
-  const ms = unit === 'm' ? value * 60 * 1000 : value * 60 * 60 * 1000;
+  const ms = Math.min(
+    unit === 'm' ? value * 60 * 1000 : value * 60 * 60 * 1000,
+    MAX_MS
+  );
   return new Date(Date.now() + ms).toISOString();
 }
 
@@ -76,57 +83,77 @@ function buildAnalysisPrompt(jid, history, presence) {
     .join('\n');
 
   const presenceInfo = presence.isStale
-    ? 'Status online: Tidak diketahui (data tidak tersedia / user sembunyikan last seen)'
-    : [
-        `Status online: ${presence.isOnline ? '🟢 ONLINE sekarang' : '🔴 OFFLINE'}`,
-        `(${presence.lastKnownPresence})`,
+    ? 'Status: Tidak diketahui'
+    : `Status: ${presence.isOnline ? '🟢 ONLINE' : '🔴 OFFLINE'} (${presence.lastKnownPresence})${
         presence.lastSeen
-          ? `· Terakhir online: ${new Date(presence.lastSeen).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}`
-          : '',
-      ].join(' ');
+          ? ` · Terakhir online: ${new Date(presence.lastSeen).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}`
+          : ''
+      }`;
 
   const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
-  return `Kamu adalah asisten WhatsApp bot yang cerdas, empatik, dan proaktif. Tugasmu menganalisa riwayat percakapan dan memutuskan apakah perlu mengirim pesan inisiatif — dengan mempertimbangkan konteks percakapan DAN status online user saat ini.
+  // Hitung berapa lama sejak pesan terakhir
+  const msSinceLast = lastSent !== '-' ? Date.now() - new Date(lastSent).getTime() : null;
+  const timeSinceLast = msSinceLast !== null
+    ? msSinceLast < 60_000 ? 'baru saja'
+    : msSinceLast < 3_600_000 ? `${Math.floor(msSinceLast / 60_000)} menit lalu`
+    : `${Math.floor(msSinceLast / 3_600_000)} jam lalu`
+    : 'tidak diketahui';
+
+  return `Kamu adalah teman dekat yang peduli dan komunikatif via WhatsApp. Tugasmu adalah membaca riwayat percakapan dengan seseorang dan memutuskan pesan terbaik untuk dikirim sekarang berdasarkan konteks.
 
 === WAKTU SEKARANG ===
 ${now}
 
 === DATA KONTAK ===
 JID: ${jid}
-Pesan pertama tercatat: ${new Date(firstSent).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
-Pesan terakhir tercatat: ${new Date(lastSent).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
-Total pesan: ${history.length}
+Percakapan dimulai: ${new Date(firstSent).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
+Pesan terakhir: ${new Date(lastSent).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} (${timeSinceLast})
+Total pesan tercatat: ${history.length}
 ${presenceInfo}
 
 === RIWAYAT PERCAKAPAN ===
 ${conversation}
 
+=== CARA BERPIKIR ===
+Baca percakapan di atas dan jawab dalam dirimu sendiri:
+- Apa topik terakhir yang dibicarakan?
+- Apakah ada sesuatu yang belum selesai, belum dijawab, atau perlu ditindaklanjuti?
+- Apakah ada momen menarik (rencana, perasaan, pertanyaan) yang bisa direspons lebih dalam?
+- Jika kamu adalah teman yang membaca chat ini, apa yang paling natural untuk kamu katakan sekarang?
+
 === PANDUAN KEPUTUSAN ===
-• Jika user ONLINE dan ada history chat:
-  - Boleh membuka topik lama yang belum selesai
-  - Boleh membuat topik baru yang relevan dari analisa history (saran, info menarik, pertanyaan follow-up)
-  - Jangan terlihat memaksa atau spam
+User ONLINE → kirim pesan. Ini momen terbaik untuk berinteraksi.
+User OFFLINE → tetap kirim jika ada konteks yang bagus (topik belum selesai, ada yang perlu diingatkan, ada follow-up natural). Hanya skip jika benar-benar tidak ada yang relevan untuk dikatakan.
+Status tidak diketahui → sama seperti offline.
 
-• Jika user OFFLINE:
-  - Secara default JANGAN kirim (shouldSend: false) kecuali topik dianggap URGENT
-  - Topik URGENT: pengingat jadwal/rencana user, mood user yang perlu diperhatikan, informasi penting dari topik sebelumnya, kemauan/niat user yang perlu diingatkan
-  - Jika urgent, set isUrgent: true dan shouldSend: true
+Prioritas dalam memilih pesan (dari paling diutamakan):
+1. Follow-up topik yang belum selesai atau pertanyaan yang belum dijawab
+2. Respons terhadap sesuatu yang user ceritakan (mood, rencana, kejadian)
+3. Pengingat sesuatu yang user sebut sebelumnya (janji, rencana, niat)
+4. Topik baru yang relevan dari analisa kepribadian/kebiasaan user berdasarkan history
+5. Sapaan hangat jika sudah lama tidak ada interaksi
 
-• Jika status TIDAK DIKETAHUI → perlakukan seperti offline (lebih aman)
+=== PANDUAN nextAnalyzeIn ===
+Pilih kapan bot harus menganalisa kontak ini lagi:
+- "10m" → user online aktif, baru kirim pesan, pantau respons
+- "15m" → user online, situasi aktif, perlu follow-up cepat
+- "20m" → user online tapi belum tentu aktif, atau baru kirim pesan ke user offline
+- "30m" → user offline, ada konteks bagus tapi tidak urgent
+- "45m" → situasi santai, tidak ada yang terlalu mendesak
+- "1h"  → percakapan sudah cukup lengkap untuk saat ini, cek lagi dalam 1 jam
+
+PENTING: nextAnalyzeIn MAKSIMAL "1h". Jangan pilih lebih dari 1 jam.
 
 === FORMAT RESPONSE ===
-Tentukan nextAnalyzeIn: berapa lama bot tunggu sebelum menganalisa kontak ini lagi.
-Pilihan: "30m" | "1h" | "2h" | "3h" | "6h" | "12h" | "24h" | null (null = default 1 jam)
-
 Balas HANYA dengan JSON valid berikut (tanpa komentar, tanpa markdown backtick):
 {
   "shouldSend": true | false,
   "isUrgent": true | false,
   "message": "pesan yang akan dikirim (string kosong jika shouldSend false)",
   "reason": "alasan singkat keputusan kamu",
-  "nextAnalyzeIn": "1h",
-  "contextSummary": "ringkasan 1-2 kalimat konteks percakapan untuk dilaporkan ke owner"
+  "nextAnalyzeIn": "10m" | "15m" | "20m" | "30m" | "45m" | "1h",
+  "contextSummary": "ringkasan 1-2 kalimat konteks percakapan"
 }`;
 }
 
@@ -296,12 +323,12 @@ export async function initProactiveService(activeJids = []) {
 
   cronService.register(
     'proactiveAnalysis',
-    '@every_5m',
+    '@every_10m',       // cek setiap 10 menit — isAnalysisAllowed() yang mengatur per-JID
     runProactiveAnalysis,
     { autoStart: true, runOnRegister: false }
   );
 
-  logger.info('🔔 proactiveService: cron job terdaftar (@hourly)');
+  logger.info('🔔 proactiveService: cron job terdaftar (@every_10m)');
 }
 
 /**
