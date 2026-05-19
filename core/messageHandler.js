@@ -8,7 +8,27 @@ import { getPersona } from '../services/personaService.js';
 import { handleTriggeredPlugin } from './triggeredPluginHandler.js';
 import { getGroupChannel, getGroupPersona } from '../services/groupService.js';
 import { recordMessage } from '../services/chatHistoryService.js';
+import { buildUserProfile } from '../services/userProfileService.js';
+import { extractFollowUpEvents } from '../services/followUpService.js';
+import { getHistory } from '../services/chatHistoryService.js';
 import logger from '../utils/logger.js';
+
+/**
+ * Jalankan analisa post-session setelah bot selesai reply.
+ * Berjalan fire-and-forget — tidak memblokir proses chat utama.
+ * - buildUserProfile: perbarui profil karakter user
+ * - extractFollowUpEvents: deteksi event/rencana untuk di-follow-up
+ *
+ * @param {string} jid
+ */
+function runPostSessionAnalysis(jid) {
+  // Ambil history terbaru (sudah include pesan yang baru saja dicatat)
+  const history = getHistory(jid);
+  if (!history?.length) return;
+
+  buildUserProfile(jid, history).catch(() => {});
+  extractFollowUpEvents(jid, history).catch(() => {});
+}
 
 /**
  * Jika pesan mengandung gambar, minta Qwen mendeskripsikan gambar tersebut
@@ -95,25 +115,6 @@ export async function handleMessage(sock, msg, plugins) {
   // Pesan tanpa teks dan tanpa gambar → abaikan
   if (!text.trim() && !hasImage) return;
 
-  // ── Ekstrak konteks quoted message (fitur reply WhatsApp) ─────────────────
-  const contextInfo = msg.message?.extendedTextMessage?.contextInfo
-    || msg.message?.imageMessage?.contextInfo
-    || msg.message?.videoMessage?.contextInfo
-    || null;
-
-  const quotedText =
-    contextInfo?.quotedMessage?.conversation ||
-    contextInfo?.quotedMessage?.extendedTextMessage?.text ||
-    contextInfo?.quotedMessage?.imageMessage?.caption ||
-    contextInfo?.quotedMessage?.videoMessage?.caption ||
-    '';
-
-  // Jika ada quoted message, bungkus teks user dengan konteks reply
-  // sehingga Qwen tahu pesan mana yang sedang dibalas
-  const textWithQuoteContext = quotedText.trim()
-    ? `[Reply pada pesan: "${quotedText.trim()}"]\n${text}`
-    : text;
-
   const sender = msg.key.participant || jid;
   const owner = isOwner(sender);
   const isGroup = jid.endsWith('@g.us');
@@ -122,9 +123,8 @@ export async function handleMessage(sock, msg, plugins) {
   // attachments = null jika bukan gambar, array jika ada gambar
   const attachments = hasImage ? await extractImageAttachment(sock, msg) : null;
 
-  // Teks efektif untuk intent detection — gunakan konteks reply jika ada,
-  // fallback ke placeholder jika pesan hanya gambar tanpa teks
-  const intentText = textWithQuoteContext.trim() || (hasImage ? '[gambar dikirim]' : '');
+  // Teks efektif untuk intent detection — placeholder jika gambar tanpa caption
+  const intentText = text.trim() || (hasImage ? '[gambar dikirim]' : '');
 
   // Helper untuk reply dengan typing delay anti-spam
   const reply = async (replyText) => {
@@ -282,9 +282,9 @@ export async function handleMessage(sock, msg, plugins) {
   // Jika AI selesai duluan dan intent belum ada hasilnya → kirim AI reply,
   // intent tetap jalan di background untuk konteks & side-effect (inject ke chat session).
   if (owner) {
-    // Catat pesan teks natural owner ke chatHistory (sertakan konteks reply jika ada)
+    // Catat pesan teks natural owner ke chatHistory
     if (text.trim()) {
-      recordMessage({ jid, role: 'user', text: textWithQuoteContext.trim(), sender }).catch(() => {});
+      recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
     }
 
     // Jika ada gambar → deskripsikan dan simpan ke chatHistory (fire-and-forget)
@@ -330,8 +330,8 @@ export async function handleMessage(sock, msg, plugins) {
           aiReplySent = true;
           if (aiReply) {
             await reply(aiReply);
-            // Catat balasan bot ke chatHistory
             recordMessage({ jid, role: 'bot', text: aiReply, sender: 'bot' }).catch(() => {});
+            runPostSessionAnalysis(jid);
           } else {
             await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
           }
@@ -355,9 +355,9 @@ export async function handleMessage(sock, msg, plugins) {
   // ─── Non-owner: AI chat saja ─────────────────────────────────────────────
   const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
-  // Catat pesan teks user ke chatHistory (sertakan konteks reply jika ada)
+  // Catat pesan teks user ke chatHistory
   if (text.trim()) {
-    recordMessage({ jid, role: 'user', text: textWithQuoteContext.trim(), sender }).catch(() => {});
+    recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
   }
 
   // Jika ada gambar → deskripsikan dan simpan ke chatHistory (fire-and-forget)
@@ -368,8 +368,8 @@ export async function handleMessage(sock, msg, plugins) {
   try {
     const aiReply = await askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model });
     await reply(aiReply);
-    // Catat balasan bot ke chatHistory
     recordMessage({ jid, role: 'bot', text: aiReply, sender: 'bot' }).catch(() => {});
+    runPostSessionAnalysis(jid);
   } catch (err) {
     logger.error({ sender, err: err.message }, 'Error saat request ke AI');
     await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');

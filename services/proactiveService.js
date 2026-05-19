@@ -1,23 +1,20 @@
 // services/proactiveService.js
 // Service analisa chatHistory setiap 10 menit (cron @every_10m).
 // isAnalysisAllowed() mengatur per-JID kapan boleh dianalisa berdasarkan nextAnalyzeAt.
-// Qwen memutuskan: apakah perlu kirim pesan, kapan analisa boleh dilakukan lagi.
-// nextAnalyzeIn maksimal 1 jam — Qwen didorong untuk agresif dan responsif.
 //
-// Skema keputusan Qwen:
-// ┌──────────────┬──────────────────┬────────────────────────────────────────────┐
-// │  isOnline    │  shouldSend      │  Tindakan                                  │
-// ├──────────────┼──────────────────┼────────────────────────────────────────────┤
-// │  true        │  true            │  Kirim pesan inisiatif                     │
-// │  true        │  false           │  Skip, simpan nextAnalyzeAt                │
-// │  false       │  true + urgent   │  Kirim pesan (topik penting)               │
-// │  false       │  true (biasa)    │  Kirim pesan (default agresif)             │
-// │  false       │  false           │  Skip, simpan nextAnalyzeAt                │
-// └──────────────┴──────────────────┴────────────────────────────────────────────┘
+// Arsitektur keputusan:
+// - Qwen TIDAK memutuskan apakah kirim atau tidak (tidak ada shouldSend)
+// - Qwen hanya bertugas menulis pesan terbaik berdasarkan konteks history
+// - Jika Qwen menghasilkan pesan → SELALU dikirim
+// - Jika Qwen menghasilkan string kosong → skip
+// - nextAnalyzeIn maksimal 1 jam (di-cap di resolveNextAnalyzeAt)
 
 import cronService from './cronService.js';
 import { getActiveJids, getHistory, pruneAllOldMessages } from './chatHistoryService.js';
 import { getPresence, subscribePresence, subscribeAll } from './presenceService.js';
+import { getUserProfile, formatUserProfileForPrompt } from './userProfileService.js';
+import { formatFollowUpsForPrompt, getDueFollowUps, sendFollowUp } from './followUpService.js';
+import { buildEnrichedContext } from './contextEnricher.js';
 import { askAI } from './aiService.js';
 import { getPersona } from './personaService.js';
 import db from './db.js';
@@ -70,7 +67,7 @@ function isAnalysisAllowed(jid) {
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 
-function buildAnalysisPrompt(jid, history, presence) {
+function buildAnalysisPrompt(jid, history, presence, enrichedContext) {
   const firstSent = history[0]?.firstSent ?? '-';
   const lastSent = history[history.length - 1]?.lastSent ?? '-';
 
@@ -92,7 +89,6 @@ function buildAnalysisPrompt(jid, history, presence) {
 
   const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
-  // Hitung berapa lama sejak pesan terakhir
   const msSinceLast = lastSent !== '-' ? Date.now() - new Date(lastSent).getTime() : null;
   const timeSinceLast = msSinceLast !== null
     ? msSinceLast < 60_000 ? 'baru saja'
@@ -100,60 +96,46 @@ function buildAnalysisPrompt(jid, history, presence) {
     : `${Math.floor(msSinceLast / 3_600_000)} jam lalu`
     : 'tidak diketahui';
 
-  return `Kamu adalah teman dekat yang peduli dan komunikatif via WhatsApp. Tugasmu adalah membaca riwayat percakapan dengan seseorang dan memutuskan pesan terbaik untuk dikirim sekarang berdasarkan konteks.
+  return `Kamu adalah teman dekat yang sedang membaca riwayat chat WhatsApp dengan seseorang. Tugasmu SATU: tulis pesan terbaik untuk dikirim sekarang berdasarkan konteks percakapan.
+
+Kamu TIDAK memutuskan apakah harus kirim atau tidak. Itu bukan tugasmu. Tugasmu hanya menulis pesan yang paling tepat dan natural berdasarkan apa yang kamu baca.
 
 === WAKTU SEKARANG ===
 ${now}
 
-=== DATA KONTAK ===
-JID: ${jid}
+=== INFO KONTAK ===
 Percakapan dimulai: ${new Date(firstSent).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
 Pesan terakhir: ${new Date(lastSent).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} (${timeSinceLast})
-Total pesan tercatat: ${history.length}
+Total pesan: ${history.length}
 ${presenceInfo}
 
-=== RIWAYAT PERCAKAPAN ===
+${enrichedContext ? enrichedContext + '\n' : ''}=== RIWAYAT PERCAKAPAN ===
 ${conversation}
 
 === CARA BERPIKIR ===
-Baca percakapan di atas dan jawab dalam dirimu sendiri:
-- Apa topik terakhir yang dibicarakan?
-- Apakah ada sesuatu yang belum selesai, belum dijawab, atau perlu ditindaklanjuti?
-- Apakah ada momen menarik (rencana, perasaan, pertanyaan) yang bisa direspons lebih dalam?
-- Jika kamu adalah teman yang membaca chat ini, apa yang paling natural untuk kamu katakan sekarang?
-
-=== PANDUAN KEPUTUSAN ===
-User ONLINE → kirim pesan. Ini momen terbaik untuk berinteraksi.
-User OFFLINE → tetap kirim jika ada konteks yang bagus (topik belum selesai, ada yang perlu diingatkan, ada follow-up natural). Hanya skip jika benar-benar tidak ada yang relevan untuk dikatakan.
-Status tidak diketahui → sama seperti offline.
-
-Prioritas dalam memilih pesan (dari paling diutamakan):
-1. Follow-up topik yang belum selesai atau pertanyaan yang belum dijawab
-2. Respons terhadap sesuatu yang user ceritakan (mood, rencana, kejadian)
-3. Pengingat sesuatu yang user sebut sebelumnya (janji, rencana, niat)
-4. Topik baru yang relevan dari analisa kepribadian/kebiasaan user berdasarkan history
-5. Sapaan hangat jika sudah lama tidak ada interaksi
+Baca percakapan di atas, lalu temukan pesan yang paling tepat dengan urutan prioritas ini:
+1. Ada follow-up terjadwal yang waktunya sudah tiba? → kirim follow-up itu
+2. Ada event/hari besar yang relevan dengan user? → singgung secara natural
+3. Ada topik yang belum selesai atau pertanyaan yang belum terjawab? → lanjutkan
+4. Ada sesuatu yang user ceritakan (perasaan, rencana, kejadian)? → respons lebih dalam
+5. Tidak ada yang spesifik? → buat topik natural berdasarkan profil dan kepribadian user
 
 === PANDUAN nextAnalyzeIn ===
-Pilih kapan bot harus menganalisa kontak ini lagi:
-- "10m" → user online aktif, baru kirim pesan, pantau respons
-- "15m" → user online, situasi aktif, perlu follow-up cepat
-- "20m" → user online tapi belum tentu aktif, atau baru kirim pesan ke user offline
-- "30m" → user offline, ada konteks bagus tapi tidak urgent
-- "45m" → situasi santai, tidak ada yang terlalu mendesak
-- "1h"  → percakapan sudah cukup lengkap untuk saat ini, cek lagi dalam 1 jam
-
-PENTING: nextAnalyzeIn MAKSIMAL "1h". Jangan pilih lebih dari 1 jam.
+Tentukan kapan bot harus menganalisa kontak ini lagi:
+- "10m" → user online aktif, pantau respons
+- "15m" → situasi aktif, perlu follow-up cepat  
+- "20m" → baru kirim pesan, tunggu sebentar
+- "30m" → tidak ada yang terlalu mendesak
+- "45m" → situasi santai
+- "1h"  → maksimal, gunakan jika benar-benar tidak ada yang perlu dipantau
 
 === FORMAT RESPONSE ===
-Balas HANYA dengan JSON valid berikut (tanpa komentar, tanpa markdown backtick):
+Balas HANYA dengan JSON valid (tanpa komentar, tanpa markdown backtick):
 {
-  "shouldSend": true | false,
-  "isUrgent": true | false,
-  "message": "pesan yang akan dikirim (string kosong jika shouldSend false)",
-  "reason": "alasan singkat keputusan kamu",
+  "message": "pesan yang akan dikirim — tulis dengan natural, 1-3 kalimat",
+  "reason": "dari mana kamu menemukan konteks pesan ini",
   "nextAnalyzeIn": "10m" | "15m" | "20m" | "30m" | "45m" | "1h",
-  "contextSummary": "ringkasan 1-2 kalimat konteks percakapan"
+  "contextSummary": "ringkasan 1-2 kalimat konteks percakapan ini"
 }`;
 }
 
@@ -162,8 +144,8 @@ function buildContextInjection(targetJid, analysis, presence) {
   const onlineStatus = presence.isStale
     ? 'tidak diketahui'
     : presence.isOnline ? 'online' : 'offline';
-  const actionStatus = analysis.shouldSend
-    ? `✅ Pesan inisiatif DIKIRIM${analysis.isUrgent ? ' (URGENT)' : ''}`
+  const actionStatus = analysis.message?.trim()
+    ? `✅ Pesan inisiatif DIKIRIM`
     : '⏭️ Tidak ada pesan dikirim';
 
   return `[SISTEM - Proactive Service Report @ ${timeStr}]
@@ -173,8 +155,8 @@ Status user saat analisa: ${onlineStatus}
 Ringkasan konteks: ${analysis.contextSummary}
 Keputusan: ${actionStatus}
 Alasan: ${analysis.reason}
-Analisa berikutnya dijadwalkan dalam: ${analysis.nextAnalyzeIn ?? '1h (default)'}
-${analysis.shouldSend ? `\nPesan yang dikirim: "${analysis.message}"` : ''}
+Analisa berikutnya: ${analysis.nextAnalyzeIn ?? '15m (default)'}
+${analysis.message?.trim() ? `\nPesan yang dikirim: "${analysis.message}"` : ''}
 
 Ini laporan otomatis proactiveService. Kamu kini memahami apa yang baru saja dilakukan bot terhadap kontak ini secara proaktif.`;
 }
@@ -195,46 +177,60 @@ async function analyzeAndActForJid(jid) {
   }
 
   const presence = getPresence(jid);
+  const ownerJid = config.ownerLid || config.ownerJid;
+  const isOwnerJid = jid === ownerJid;
+  const { prompt: systemPrompt, model } = getPersona(jid, isOwnerJid);
+
+  // ── Cek follow-up yang sudah due (prioritas tertinggi) ────────────────────
+  const dueFollowUps = getDueFollowUps().filter((e) => e.jid === jid);
+  if (dueFollowUps.length > 0) {
+    logger.info({ jid, count: dueFollowUps.length }, '📅 proactiveService: ada follow-up yang due');
+    for (const followUp of dueFollowUps) {
+      await sendFollowUp(followUp, history, systemPrompt);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
 
   logger.info(
     { jid, messages: history.length, online: presence.isOnline, stale: presence.isStale },
     '🔍 proactiveService: menganalisa JID...'
   );
 
+  // ── Kumpulkan enriched context ─────────────────────────────────────────────
+  const userProfile = getUserProfile(jid);
+  const profileText = formatUserProfileForPrompt(jid);
+  const followUpsText = formatFollowUpsForPrompt(jid);
+  const enrichedContext = [
+    profileText,
+    buildEnrichedContext({ history, userProfile, followUps: followUpsText }),
+  ].filter(Boolean).join('\n\n');
+
   // ── Step 1: Analisa Qwen ───────────────────────────────────────────────────
-  const prompt = buildAnalysisPrompt(jid, history, presence);
+  const prompt = buildAnalysisPrompt(jid, history, presence, enrichedContext);
   let analysis;
 
   try {
     const rawResponse = await askAI({
       jid: `proactive_analysis_${jid}`,
       userText: prompt,
-      systemPrompt: 'Kamu adalah sistem analisa percakapan WhatsApp. Selalu balas dengan JSON valid sesuai format yang diminta. Tidak ada teks lain selain JSON.',
+      systemPrompt: 'Kamu adalah sistem analisa percakapan WhatsApp. Tugasmu HANYA menulis pesan terbaik berdasarkan konteks. Balas dengan JSON valid sesuai format. Tidak ada teks lain selain JSON.',
     });
 
     const cleaned = rawResponse.replace(/```json|```/gi, '').trim();
     analysis = JSON.parse(cleaned);
 
     logger.info(
-      { jid, shouldSend: analysis.shouldSend, isUrgent: analysis.isUrgent, nextAnalyzeIn: analysis.nextAnalyzeIn, reason: analysis.reason },
+      { jid, nextAnalyzeIn: analysis.nextAnalyzeIn, reason: analysis.reason, preview: analysis.message?.slice(0, 60) },
       '🧠 proactiveService: analisa Qwen selesai'
     );
   } catch (err) {
     logger.error({ jid, err: err.message }, '❌ proactiveService: gagal analisa atau parse JSON');
-    await saveState(jid, { nextAnalyzeAt: resolveNextAnalyzeAt('1h') });
+    await saveState(jid, { nextAnalyzeAt: resolveNextAnalyzeAt('30m') });
     return;
   }
 
-  // ── Step 2: Keputusan kirim ────────────────────────────────────────────────
-  // Kirim jika: shouldSend true DAN (user online ATAU topik urgent)
-  const canSend = analysis.shouldSend && analysis.message?.trim();
-  const willSend = canSend && (presence.isOnline || analysis.isUrgent);
-
-  if (canSend && !willSend) {
-    logger.info({ jid }, '⏸️ proactiveService: user offline & tidak urgent, tunda pengiriman');
-  }
-
-  if (willSend) {
+  // ── Step 2: Kirim pesan ────────────────────────────────────────────────────
+  if (analysis.message?.trim()) {
     const sock = global._sock;
     if (!sock) {
       logger.warn({ jid }, '⚠️ proactiveService: sock tidak tersedia');
@@ -242,35 +238,26 @@ async function analyzeAndActForJid(jid) {
       try {
         await sock.sendMessage(jid, { text: analysis.message.trim() });
         logger.info(
-          { jid, urgent: analysis.isUrgent, preview: analysis.message.slice(0, 60) },
+          { jid, preview: analysis.message.slice(0, 60) },
           '📤 proactiveService: pesan inisiatif terkirim'
         );
       } catch (err) {
         logger.error({ jid, err: err.message }, '❌ proactiveService: gagal kirim pesan');
       }
     }
+  } else {
+    logger.info({ jid }, '⏭️ proactiveService: Qwen tidak menghasilkan pesan, skip');
   }
 
-  // ── Step 3: Inject konteks ke session chat JID yang dianalisa ────────────
-  // Tujuan: agar sesi chat target JID memahami apa yang baru dilakukan bot.
-  // - Jika JID adalah owner → inject ke session owner
-  // - Jika JID adalah user biasa → inject ke session user tersebut
-  // Dengan begitu, saat percakapan berlanjut, Qwen sudah punya konteks proactive.
-  const ownerJid = config.ownerLid || config.ownerJid;
-  const isOwnerJid = jid === ownerJid;
-
+  // ── Step 3: Inject konteks ke session chat JID ─────────────────────────────
   try {
-    const { prompt: targetSystemPrompt, model: targetModel } = getPersona(jid, isOwnerJid);
     await askAI({
       jid,
       userText: buildContextInjection(jid, analysis, presence),
-      systemPrompt: targetSystemPrompt,
-      model: targetModel,
+      systemPrompt,
+      model,
     });
-    logger.info(
-      { targetJid: jid, isOwner: isOwnerJid },
-      '💉 proactiveService: konteks diinjeksi ke session JID target'
-    );
+    logger.info({ targetJid: jid, isOwner: isOwnerJid }, '💉 proactiveService: konteks diinjeksi ke session JID target');
   } catch (err) {
     logger.warn({ jid, err: err.message }, '⚠️ proactiveService: gagal inject konteks ke session target');
   }

@@ -1,20 +1,82 @@
 // services/sessionStore.js
-// In-memory store untuk menyimpan X-Session-ID dari API server per JID
+// Persistent store untuk X-Session-ID dari API server per JID.
+//
+// Sebelumnya: pure in-memory Map → session hilang saat bot mati/reconnect,
+// meski session di server AI masih aktif dan belum expired.
+//
+// Sekarang: dua lapis storage —
+//   1. In-memory Map  → akses cepat saat bot berjalan
+//   2. DB collection "aiSessions" → persist ke disk, survive restart
+//
+// Alur saat bot restart:
+//   loadFromDb() → baca semua session dari DB → isi in-memory Map
+//   → saat ada pesan masuk, session lama langsung dipakai (continue mode)
+//   → session yang sudah expired saat dibaca otomatis dibersihkan
+//
+// Struktur dokumen di collection "aiSessions":
+// {
+//   jid:       string,      // identifier unik per JID
+//   sessionId: string,      // X-Session-ID dari server AI
+//   lastUsed:  ISO string,  // kapan terakhir digunakan
+// }
+
+import db from './db.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
 
+const COLLECTION = 'aiSessions';
+
 class SessionStore {
   constructor() {
-    // Map<jid, { sessionId, lastUsed }>
+    // In-memory cache — sumber kebenaran saat runtime
     this._store = new Map();
     this._ttl = config.sessionTtl;
 
-    // Auto-cleanup setiap 10 menit
+    // Auto-cleanup setiap 10 menit (hapus expired dari memory + DB)
     setInterval(() => this._cleanup(), 10 * 60 * 1000);
   }
 
+  // ─── Init ────────────────────────────────────────────────────────────────────
+
   /**
-   * Ambil session ID untuk JID tertentu
+   * Load semua session dari DB ke in-memory Map.
+   * Dipanggil SEKALI saat bot start dari bot.js (setelah koneksi terbuka).
+   * Session yang sudah expired saat load langsung dibuang.
+   */
+  async loadFromDb() {
+    try {
+      const docs = db.find(COLLECTION, {});
+      const now = Date.now();
+      let loaded = 0;
+      let expired = 0;
+
+      for (const doc of docs) {
+        const lastUsed = new Date(doc.lastUsed).getTime();
+        if (now - lastUsed > this._ttl) {
+          // Sudah expired — hapus dari DB sekalian
+          await db.delete(COLLECTION, { jid: doc.jid });
+          expired++;
+        } else {
+          this._store.set(doc.jid, {
+            sessionId: doc.sessionId,
+            lastUsed,
+          });
+          loaded++;
+        }
+      }
+
+      logger.info({ loaded, expired }, '📦 sessionStore: session dimuat dari DB');
+    } catch (err) {
+      logger.error({ err: err.message }, '❌ sessionStore: gagal load dari DB');
+    }
+  }
+
+  // ─── Public API ───────────────────────────────────────────────────────────────
+
+  /**
+   * Ambil session ID untuk JID tertentu.
+   * Cek memory dulu, jika tidak ada cek DB (fallback untuk race condition).
+   *
    * @param {string} jid
    * @returns {string|null}
    */
@@ -25,7 +87,9 @@ class SessionStore {
     // Cek TTL
     if (Date.now() - entry.lastUsed > this._ttl) {
       this._store.delete(jid);
-      logger.debug({ jid }, 'Session expired, dihapus dari store');
+      // Hapus dari DB juga (fire-and-forget)
+      db.delete(COLLECTION, { jid }).catch(() => {});
+      logger.debug({ jid }, '🕐 sessionStore: session expired, dihapus');
       return null;
     }
 
@@ -33,36 +97,77 @@ class SessionStore {
   }
 
   /**
-   * Simpan/update session ID untuk JID
+   * Simpan/update session ID untuk JID.
+   * Tulis ke memory DAN DB secara bersamaan.
+   *
    * @param {string} jid
    * @param {string} sessionId
    */
   set(jid, sessionId) {
-    this._store.set(jid, {
+    const lastUsed = Date.now();
+
+    // Tulis ke memory
+    this._store.set(jid, { sessionId, lastUsed });
+
+    // Persist ke DB (fire-and-forget — tidak blokir alur chat)
+    db.upsert(COLLECTION, { jid }, {
+      jid,
       sessionId,
-      lastUsed: Date.now(),
+      lastUsed: new Date(lastUsed).toISOString(),
+    }).catch((err) => {
+      logger.warn({ jid, err: err.message }, '⚠️ sessionStore: gagal persist ke DB');
     });
   }
 
   /**
-   * Hapus session untuk JID (reset percakapan)
+   * Hapus session untuk JID (reset percakapan).
+   * Hapus dari memory DAN DB.
+   *
    * @param {string} jid
    */
   delete(jid) {
     this._store.delete(jid);
-    logger.debug({ jid }, 'Session dihapus dari store');
+    db.delete(COLLECTION, { jid }).catch(() => {});
+    logger.debug({ jid }, '🗑️ sessionStore: session dihapus');
   }
 
   /**
-   * Hapus semua session
+   * Hapus semua session (reset total).
    */
   clear() {
     this._store.clear();
-    logger.info('Semua session dibersihkan');
+    // Hapus semua dokumen di collection (iterasi karena db mungkin tidak support deleteMany)
+    try {
+      const docs = db.find(COLLECTION, {});
+      for (const doc of docs) {
+        db.delete(COLLECTION, { jid: doc.jid }).catch(() => {});
+      }
+    } catch (err) {
+      logger.warn({ err: err.message }, '⚠️ sessionStore: gagal clear DB');
+    }
+    logger.info('🗑️ sessionStore: semua session dibersihkan');
   }
 
   /**
-   * Info semua session aktif
+   * Perbarui `lastUsed` untuk JID tanpa mengubah sessionId.
+   * Dipanggil setiap kali session digunakan agar TTL tidak expired prematur.
+   *
+   * @param {string} jid
+   */
+  touch(jid) {
+    const entry = this._store.get(jid);
+    if (!entry) return;
+
+    entry.lastUsed = Date.now();
+    this._store.set(jid, entry);
+
+    db.update(COLLECTION, { jid }, {
+      lastUsed: new Date(entry.lastUsed).toISOString(),
+    }).catch(() => {});
+  }
+
+  /**
+   * Info semua session aktif (untuk debug/logging).
    * @returns {Array}
    */
   list() {
@@ -73,21 +178,37 @@ class SessionStore {
     }));
   }
 
-  // Private: bersihkan session yang expired
-  _cleanup() {
+  /**
+   * Jumlah session aktif di memory.
+   * @returns {number}
+   */
+  size() {
+    return this._store.size;
+  }
+
+  // ─── Private ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Bersihkan session expired dari memory dan DB.
+   * Berjalan otomatis setiap 10 menit via setInterval.
+   */
+  async _cleanup() {
     const now = Date.now();
     let removed = 0;
+
     for (const [jid, entry] of this._store.entries()) {
       if (now - entry.lastUsed > this._ttl) {
         this._store.delete(jid);
+        await db.delete(COLLECTION, { jid }).catch(() => {});
         removed++;
       }
     }
+
     if (removed > 0) {
-      logger.debug({ removed }, 'Session cleanup selesai');
+      logger.debug({ removed }, '🧹 sessionStore: cleanup session expired');
     }
   }
 }
 
-// Singleton
+// Singleton — satu instance untuk seluruh aplikasi
 export const sessionStore = new SessionStore();

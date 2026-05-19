@@ -19,6 +19,7 @@ import { initProactiveService } from '../services/proactiveService.js';
 import { pruneAllOldMessages, getAllKnownJids } from '../services/chatHistoryService.js';
 import { updatePresence } from '../services/presenceService.js';
 import { handleStatus } from '../services/statusService.js';
+import { sessionStore } from '../services/sessionStore.js';
 import cronService from '../services/cronService.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
@@ -127,6 +128,12 @@ export async function startBot() {
         await sock.sendPresenceUpdate('available');
         logger.info('🟢 Status: Online');
       }
+
+      // ── Load AI sessions dari DB (persist survive restart) ────────────────
+      // Harus dipanggil sebelum warmup agar session lama yang masih valid
+      // tidak di-overwrite dengan session baru yang tidak perlu.
+      await sessionStore.loadFromDb();
+      logger.info({ sessions: sessionStore.size() }, '📦 AI sessions dimuat dari DB');
 
       // ── Init intent session untuk owner ───────────────────────────────────
       // Session persisten di Qwen untuk deteksi intent setiap pesan owner

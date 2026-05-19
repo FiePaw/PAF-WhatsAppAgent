@@ -9,10 +9,10 @@ import logger from '../utils/logger.js';
 // create_image       → minimal 180 detik
 // create_video       → minimal 300 detik
 const TASK_TIMEOUTS = {
-  chat:         120_000,
-  web_search:   120_000,
-  create_image: 180_000,
-  create_video: 300_000,
+  chat:         480_000, // 8 menit
+  web_search:   480_000, // 5 menit
+  create_image: 600_000, // 10 menit
+  create_video: 900_000, // 15 menit
 };
 
 const client = axios.create({

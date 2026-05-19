@@ -5,7 +5,125 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [3.7.0] — 2026-05-17
+## [4.1.0] — 2026-05-20
+
+### Added
+- `services/contextEnricher.js` — service baru yang menggabungkan **Fitur 6 (Event Awareness)** dan **Fitur 3 (Time-Aware Greeting)** menjadi satu blok konteks siap injeksi untuk `proactiveService`.
+
+**Fitur 3 · Time-Aware Greeting:**
+- `getTimeContext()` — deteksi waktu lokal user (WIB, UTC+7) dan label waktu: pagi/siang/sore/malam/larut malam, beserta rekomendasi tone (semangat untuk pagi, santai untuk malam, singkat untuk larut malam)
+- `analyzeActivityPattern(history)` — analisa jam puncak keaktifan user dari `chatHistory` (menghitung distribusi pesan per jam), deteksi apakah sekarang adalah jam aktif user, deteksi **absen** (user biasanya aktif jam ini tapi belum ada pesan hari ini → trigger check-in)
+- `formatTimeContext(history)` → string blok konteks waktu siap injeksi ke prompt
+
+**Fitur 6 · Event Awareness:**
+- `NATIONAL_EVENTS` — daftar 12 hari besar nasional/internasional (Tahun Baru, Kartini, Kemerdekaan, Natal, dll) dengan bulan dan tanggal
+- `checkNationalEvents()` — cek apakah hari ini atau besok ada hari besar, return `{ today, tomorrow }`
+- `checkPersonalEvents(userProfile)` — cocokkan `userProfile.goals` dengan kata kunci event personal (wisuda, ujian, sidang, ulang tahun, pernikahan, dll) → bot bisa menyinggung event penting user secara natural
+- `formatEventContext(userProfile)` → string blok konteks event siap injeksi
+
+**Public API:**
+- `buildEnrichedContext({ history, userProfile, followUps })` — gabungkan time context + event context + pending follow-ups menjadi satu string untuk diinjeksi ke prompt `proactiveService`
+
+### Architecture
+```
+buildEnrichedContext()
+  ├── formatTimeContext(history)        → waktu + tone + absen detection
+  ├── formatEventContext(userProfile)   → hari besar + event personal
+  └── followUps                        → pending follow-ups dari followUpService
+           ↓
+  Satu blok teks diinjeksi ke buildAnalysisPrompt()
+```
+
+---
+
+## [4.0.0] — 2026-05-20
+
+### Added
+- `services/followUpService.js` — service baru untuk **Fitur 7 · Follow-up Engine**. Mendeteksi event/rencana/niat user dari percakapan dan menjadwalkan follow-up otomatis.
+
+**Struktur dokumen `followUpEvents` (collection DB):**
+```json
+{
+  "jid":        "628xxx@s.whatsapp.net",
+  "event":      "presentasi di kampus",
+  "context":    "besok aku presentasi tugas akhir",
+  "followUpAt": "ISO timestamp",
+  "done":       false,
+  "createdAt":  "ISO timestamp"
+}
+```
+
+**Fungsi utama:**
+- `extractFollowUpEvents(jid, history)` — dipanggil fire-and-forget setelah bot reply. Qwen membaca pesan user (20 terakhir), mendeteksi semua event yang memiliki dimensi waktu, dan menyimpannya ke `followUpEvents` dengan timestamp `followUpAt` yang tepat. Duplikat berdasarkan deskripsi event di-skip otomatis.
+- `getDueFollowUps()` — query semua event yang `followUpAt <= now` dan `done: false`. Dipanggil di setiap siklus `proactiveService`.
+- `sendFollowUp(event, history, systemPrompt)` — generate pesan follow-up natural via Qwen (session terpisah `forceNew`), kirim ke JID, tandai event sebagai `done: true`.
+- `getPendingFollowUps(jid)` — ambil semua event belum done untuk satu JID.
+- `formatFollowUpsForPrompt(jid)` → string blok pending follow-ups siap injeksi ke prompt.
+- `markFollowUpDone(eventId)` — tandai event selesai.
+
+### Changed
+- `core/messageHandler.js` — `runPostSessionAnalysis(jid)` kini memanggil `extractFollowUpEvents(jid, history)` fire-and-forget setelah setiap reply berhasil.
+- `services/proactiveService.js` — sebelum analisa Qwen, `getDueFollowUps()` dicek terlebih dahulu. Jika ada event due untuk JID yang sedang dianalisa, `sendFollowUp()` dijalankan terlebih dahulu (prioritas di atas analisa proactive reguler).
+
+### Behavior
+- Sebelumnya: bot tidak mengingat rencana atau niat user — setiap percakapan berdiri sendiri tanpa tindak lanjut.
+- Sekarang: setiap rencana/niat user yang punya dimensi waktu dicatat. Bot secara otomatis mengirim follow-up natural ("gimana tadi presentasinya?") setelah waktunya tiba — tanpa user perlu mengingatkan.
+
+---
+
+## [3.9.0] — 2026-05-20
+
+### Added
+- `services/userProfileService.js` — service baru untuk **Fitur 10 · Persona Evolution**. Setiap sesi chat selesai, Qwen mengekstrak "profil karakter" user dari riwayat percakapan dan menyimpannya ke collection `userProfiles`.
+
+**Struktur dokumen `userProfiles` (collection DB):**
+```json
+{
+  "jid":         "628xxx@s.whatsapp.net",
+  "nickname":    "Fia",
+  "personality": "Ramah, suka curhat, kadang overthinking",
+  "hobbies":     ["nonton anime", "masak"],
+  "topics":      ["kuliah", "outfit", "makanan"],
+  "sensitive":   ["nilai jelek", "masalah keluarga"],
+  "mood":        "excited",
+  "language":    "casual dengan sedikit bahasa gaul",
+  "goals":       ["selesaikan skripsi bulan ini", "daftar gym"],
+  "summary":     "User yang aktif dan ekspresif, sering cerita keseharian...",
+  "updatedAt":   "ISO timestamp"
+}
+```
+
+**Fungsi utama:**
+- `buildUserProfile(jid, history)` — dipanggil fire-and-forget setelah bot reply (minimal 4 pesan). Qwen membaca 30 pesan terakhir dan mengekstrak profil. Jika profil sudah ada, Qwen **menggabungkan** info baru dengan yang lama — tidak menghapus data lama kecuali ada yang bertentangan.
+- `getUserProfile(jid)` — ambil profil dari DB, return `null` jika belum ada.
+- `formatUserProfileForPrompt(jid)` → string blok profil siap injeksi ke prompt Qwen.
+
+### Changed
+- `core/messageHandler.js` — tambah helper `runPostSessionAnalysis(jid)` yang dipanggil fire-and-forget setelah setiap reply berhasil (owner DM dan non-owner DM). Memanggil `buildUserProfile()` dan `extractFollowUpEvents()` secara paralel tanpa memblokir proses chat.
+- `services/proactiveService.js` — `buildAnalysisPrompt()` kini menerima parameter `enrichedContext`. Sebelum analisa, `formatUserProfileForPrompt(jid)` dipanggil dan hasilnya diinjeksi ke prompt — Qwen mengetahui kepribadian, hobi, mood, dan tujuan user sebelum memutuskan pesan terbaik.
+
+### Behavior
+- Sebelumnya: bot tidak memiliki memori tentang siapa user — setiap sesi dimulai dari nol, bot tidak tahu nama panggilan, kebiasaan, atau hal sensitif user.
+- Sekarang: bot membangun "karakter" user secara bertahap dari percakapan. Semakin banyak interaksi, semakin dalam pemahaman bot tentang user. Profil diperbarui setiap sesi selesai dan langsung tersedia untuk sesi berikutnya.
+
+---
+
+## [3.8.0] — 2026-05-18
+
+### Changed
+- `services/proactiveService.js` — `buildAnalysisPrompt()` di-reframe total: Qwen tidak lagi diberi pertanyaan `shouldSend: true/false`. Field `shouldSend` dan `isUrgent` **dihapus** dari JSON response. Qwen sekarang hanya diminta **menulis pesan terbaik** — keputusan kirim/tidak sepenuhnya ada di kode (`analyzeAndActForJid`): jika `analysis.message` ada isinya → kirim, jika kosong → skip.
+- `services/proactiveService.js` — semua framing defensif dihapus dari prompt: tidak ada lagi "jangan spam", "secara default JANGAN kirim", "lebih aman". Framing diubah dari "asisten yang hati-hati" menjadi "teman dekat yang peduli" dengan prioritas konteks yang eksplisit.
+- `services/proactiveService.js` — `resolveNextAnalyzeAt()`: default diubah dari `1h` menjadi `15m`. Ditambahkan cap maksimum `1h` — nilai apapun di atas 1 jam otomatis di-cap. Opsi baru: `"10m"`, `"15m"`, `"20m"`, `"45m"`.
+- `services/proactiveService.js` — cron diubah dari `@hourly` menjadi `@every_10m`. Cron tetap berjalan setiap 10 menit, `isAnalysisAllowed()` yang menjadi penjaga gerbang per-JID berdasarkan `nextAnalyzeAt`.
+- `services/proactiveService.js` — `buildContextInjection()` diperbarui: hapus referensi `shouldSend`/`isUrgent`, ganti dengan cek `analysis.message?.trim()`.
+
+### Behavior
+- Sebelumnya: Qwen punya "veto" — bisa menolak kirim pesan dengan argumen seperti "akan terasa spammy" atau "lebih baik menunggu". Bot cenderung pasif meski ada konteks percakapan yang kaya.
+- Sekarang: Qwen hanya bertugas menulis pesan terbaik — tidak punya hak menolak. Bot jauh lebih aktif dan responsif terhadap konteks percakapan.
+
+---
+
+
 
 ### Changed
 - `core/messageHandler.js` — tambah ekstraksi `contextInfo` dari quoted message (reply WhatsApp). Saat user/owner membalas pesan bot, teks yang dikutip diambil dari `contextInfo?.quotedMessage` dan dibungkus bersama pesan user menjadi `textWithQuoteContext`:
@@ -19,6 +137,19 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Behavior
 - Sebelumnya: saat user membalas pesan bot, Qwen hanya menerima teks baru tanpa tahu pesan mana yang dibalas — respons bisa tidak nyambung jika pesan sebelumnya sudah jauh di atas.
+- Sekarang: Qwen menerima pesan dengan konteks penuh — tahu bahwa user sedang membalas kalimat spesifik dari bot, sehingga respons lebih relevan dan koheren.
+
+---
+
+## [3.7.0] — 2026-05-17
+
+### Changed
+- `core/messageHandler.js` — tambah ekstraksi `contextInfo` dari quoted message (reply WhatsApp). Saat user/owner membalas pesan bot, teks yang dikutip diambil dari `contextInfo?.quotedMessage` dan dibungkus bersama pesan user menjadi `textWithQuoteContext` dengan format `[Reply pada pesan: "<teks yang dikutip>"]\n<pesan user>`. Format ini diteruskan ke `askAI()` sebagai `intentText` dan dicatat ke `chatHistory`.
+- `core/messageHandler.js` — `contextInfo` diekstrak dari tiga kemungkinan field: `extendedTextMessage`, `imageMessage`, `videoMessage` — menangani semua skenario reply.
+- `core/messageHandler.js` — `recordMessage` untuk owner dan non-owner kini menyimpan `textWithQuoteContext` ke `chatHistory`.
+
+### Behavior
+- Sebelumnya: saat user membalas pesan bot, Qwen hanya menerima teks baru tanpa tahu pesan mana yang dibalas.
 - Sekarang: Qwen menerima pesan dengan konteks penuh — tahu bahwa user sedang membalas kalimat spesifik dari bot, sehingga respons lebih relevan dan koheren.
 
 ---
