@@ -2,12 +2,15 @@
 // Service analisa chatHistory setiap 10 menit (cron @every_10m).
 // isAnalysisAllowed() mengatur per-JID kapan boleh dianalisa berdasarkan nextAnalyzeAt.
 //
-// Arsitektur keputusan:
-// - Qwen TIDAK memutuskan apakah kirim atau tidak (tidak ada shouldSend)
-// - Qwen hanya bertugas menulis pesan terbaik berdasarkan konteks history
-// - Jika Qwen menghasilkan pesan → SELALU dikirim
-// - Jika Qwen menghasilkan string kosong → skip
-// - nextAnalyzeIn maksimal 1 jam (di-cap di resolveNextAnalyzeAt)
+// Anti-spam: cooldown 30 menit per JID — hanya satu pesan outbound per 30 menit.
+//
+// Sistem prioritas per siklus (satu pesan per JID):
+//   1. Follow-up due       → prioritas tertinggi, langsung kirim dan selesai
+//   2. Analisa Qwen        → event personal → event nasional → proactive reguler
+//
+// Arsitektur keputusan Qwen:
+//   Qwen TIDAK memutuskan apakah kirim atau tidak (tidak ada shouldSend).
+//   Qwen hanya menulis pesan terbaik — jika ada isinya → kirim, kosong → skip.
 
 import cronService from './cronService.js';
 import { getActiveJids, getHistory, pruneAllOldMessages } from './chatHistoryService.js';
@@ -23,14 +26,37 @@ import logger from '../utils/logger.js';
 
 const STATE_COLLECTION = 'proactiveState';
 
+// Cooldown minimum antar pesan outbound ke JID yang sama (dari sumber manapun)
+const COOLDOWN_MS = 30 * 60 * 1000; // 30 menit
+
 // ─── State helpers ────────────────────────────────────────────────────────────
 
 function getState(jid) {
-  return db.findOne(STATE_COLLECTION, { jid }) ?? { jid, nextAnalyzeAt: null };
+  return db.findOne(STATE_COLLECTION, { jid }) ?? { jid, nextAnalyzeAt: null, lastSentAt: null };
 }
 
 async function saveState(jid, updates) {
   await db.upsert(STATE_COLLECTION, { jid }, updates);
+}
+
+/**
+ * Catat waktu terakhir pesan dikirim ke JID.
+ * Dipanggil setiap kali pesan outbound berhasil terkirim (dari sumber manapun).
+ * @param {string} jid
+ */
+export async function recordSent(jid) {
+  await saveState(jid, { lastSentAt: new Date().toISOString() });
+}
+
+/**
+ * Cek apakah cooldown sudah lewat untuk JID ini.
+ * @param {string} jid
+ * @returns {boolean}
+ */
+function isCooldownClear(jid) {
+  const state = getState(jid);
+  if (!state.lastSentAt) return true;
+  return Date.now() - new Date(state.lastSentAt).getTime() >= COOLDOWN_MS;
 }
 
 /**
@@ -181,14 +207,32 @@ async function analyzeAndActForJid(jid) {
   const isOwnerJid = jid === ownerJid;
   const { prompt: systemPrompt, model } = getPersona(jid, isOwnerJid);
 
-  // ── Cek follow-up yang sudah due (prioritas tertinggi) ────────────────────
+  // ── Cek cooldown — satu pesan per 30 menit per JID ────────────────────────
+  // Follow-up dengan isUrgent bisa bypass cooldown (lihat di bawah).
+  const cooldownClear = isCooldownClear(jid);
+  const state = getState(jid);
+  if (!cooldownClear) {
+    const remaining = Math.ceil(
+      (COOLDOWN_MS - (Date.now() - new Date(state.lastSentAt).getTime())) / 60_000
+    );
+    logger.debug({ jid, remainingMinutes: remaining }, '⏸️ proactiveService: cooldown aktif, skip kirim');
+    // Tetap jadwalkan analisa berikutnya
+    await saveState(jid, { nextAnalyzeAt: resolveNextAnalyzeAt('15m') });
+    return;
+  }
+
+  // ── Prioritas 1: Follow-up due ────────────────────────────────────────────
+  // Prioritas tertinggi — sudah dijanjikan ke user, harus dikirim.
+  // Hanya satu follow-up per siklus untuk hindari burst.
   const dueFollowUps = getDueFollowUps().filter((e) => e.jid === jid);
   if (dueFollowUps.length > 0) {
-    logger.info({ jid, count: dueFollowUps.length }, '📅 proactiveService: ada follow-up yang due');
-    for (const followUp of dueFollowUps) {
-      await sendFollowUp(followUp, history, systemPrompt);
-      await new Promise((r) => setTimeout(r, 2000));
-    }
+    const followUp = dueFollowUps[0]; // ambil satu saja per siklus
+    logger.info({ jid, event: followUp.event }, '📅 proactiveService: follow-up due, kirim sekarang');
+    await sendFollowUp(followUp, history, systemPrompt);
+    await recordSent(jid);
+    // Selesai untuk siklus ini — skip analisa proactive reguler
+    await saveState(jid, { nextAnalyzeAt: resolveNextAnalyzeAt('20m') });
+    return;
   }
 
   logger.info(
@@ -205,7 +249,7 @@ async function analyzeAndActForJid(jid) {
     buildEnrichedContext({ history, userProfile, followUps: followUpsText }),
   ].filter(Boolean).join('\n\n');
 
-  // ── Step 1: Analisa Qwen ───────────────────────────────────────────────────
+  // ── Prioritas 2-4: Analisa Qwen (event personal, event nasional, proactive) ─
   const prompt = buildAnalysisPrompt(jid, history, presence, enrichedContext);
   let analysis;
 
@@ -229,7 +273,7 @@ async function analyzeAndActForJid(jid) {
     return;
   }
 
-  // ── Step 2: Kirim pesan ────────────────────────────────────────────────────
+  // ── Kirim pesan jika Qwen menghasilkan pesan ───────────────────────────────
   if (analysis.message?.trim()) {
     const sock = global._sock;
     if (!sock) {
@@ -237,6 +281,7 @@ async function analyzeAndActForJid(jid) {
     } else {
       try {
         await sock.sendMessage(jid, { text: analysis.message.trim() });
+        await recordSent(jid);
         logger.info(
           { jid, preview: analysis.message.slice(0, 60) },
           '📤 proactiveService: pesan inisiatif terkirim'
@@ -249,7 +294,7 @@ async function analyzeAndActForJid(jid) {
     logger.info({ jid }, '⏭️ proactiveService: Qwen tidak menghasilkan pesan, skip');
   }
 
-  // ── Step 3: Inject konteks ke session chat JID ─────────────────────────────
+  // ── Inject konteks ke session chat JID ────────────────────────────────────
   try {
     await askAI({
       jid,
@@ -262,7 +307,7 @@ async function analyzeAndActForJid(jid) {
     logger.warn({ jid, err: err.message }, '⚠️ proactiveService: gagal inject konteks ke session target');
   }
 
-  // ── Step 4: Simpan nextAnalyzeAt ──────────────────────────────────────────
+  // ── Simpan nextAnalyzeAt ───────────────────────────────────────────────────
   await saveState(jid, { nextAnalyzeAt: resolveNextAnalyzeAt(analysis.nextAnalyzeIn ?? null) });
   logger.debug({ jid, nextAnalyzeAt: getState(jid).nextAnalyzeAt }, '🗓️ proactiveService: jadwal analisa berikutnya tersimpan');
 }

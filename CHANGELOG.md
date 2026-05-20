@@ -5,7 +5,66 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [4.1.0] — 2026-05-20
+## [4.3.0] — 2026-05-21
+
+### Added
+- `services/proactiveService.js` — sistem **anti-spam** berbasis cooldown dan prioritas.
+
+**Cooldown per JID:**
+- Konstanta `COOLDOWN_MS = 30 menit` — minimum jarak antar pesan outbound ke JID yang sama dari sumber manapun (proactive, follow-up, event)
+- `isCooldownClear(jid)` — cek apakah cooldown sudah lewat berdasarkan `lastSentAt` di `proactiveState`
+- `recordSent(jid)` (export baru) — catat timestamp pengiriman ke `proactiveState.lastSentAt`. Dipanggil setiap kali pesan berhasil dikirim dari sumber manapun
+- Jika cooldown masih aktif → skip kirim, jadwalkan ulang `nextAnalyzeAt` ke 15 menit, tidak panggil Qwen (hemat API)
+
+**Sistem prioritas per siklus (satu pesan per JID):**
+```
+1. Follow-up due    → langsung kirim + recordSent + return (skip analisa Qwen)
+2. Analisa Qwen     → event personal > event nasional > proactive reguler
+                      (semua dalam satu prompt, Qwen yang memilih prioritasnya)
+```
+
+### Changed
+- `services/followUpService.js` — `sendFollowUp()` kini memanggil `recordSent(jid)` via dynamic import setelah pesan berhasil terkirim, agar cooldown di `proactiveService` ikut terupdate meski follow-up dikirim dari luar siklus utama.
+- `services/proactiveService.js` — `getState()` kini menyertakan `lastSentAt: null` sebagai default field.
+
+### Behavior
+- Sebelumnya: empat sumber pesan (proactive, follow-up, event nasional, event personal) bisa semua trigger dalam satu siklus 10 menit untuk JID yang sama → burst pesan sangat mungkin terjadi.
+- Sekarang: maksimum satu pesan per 30 menit per JID dari sumber apapun. Dalam satu siklus, hanya satu sumber yang dieksekusi berdasarkan prioritas.
+
+---
+
+## [4.2.0] — 2026-05-21
+
+### Changed
+- `services/sessionStore.js` — rewrite total dari pure in-memory `Map` menjadi **dua lapis storage**: in-memory Map (akses cepat saat runtime) + collection DB `aiSessions` (persist ke disk).
+
+**Mekanisme baru:**
+- `set(jid, sessionId)` → tulis ke memory + `db.upsert('aiSessions', ...)` fire-and-forget
+- `get(jid)` → cek memory, jika expired hapus memory + DB, return null
+- `delete(jid)` → hapus memory + DB
+- `touch(jid)` (baru) → perbarui `lastUsed` tanpa ganti sessionId — perpanjang TTL
+- `size()` (baru) → jumlah session aktif di memory
+- `loadFromDb()` (baru) → baca semua dokumen `aiSessions` dari DB ke memory. Session yang sudah expired saat load langsung dihapus dari DB. Dipanggil sekali saat bot start.
+- Auto-cleanup setiap 10 menit via `setInterval` — hapus session expired dari memory dan DB
+
+**Struktur dokumen `aiSessions`:**
+```json
+{
+  "jid":       "628xxx@s.whatsapp.net",
+  "sessionId": "8da37546...",
+  "lastUsed":  "ISO timestamp"
+}
+```
+
+- `core/bot.js` — tambah `import { sessionStore }` dan panggil `sessionStore.loadFromDb()` **sebelum** `warmupOwnerSession`. Karena `warmupOwnerSession` sudah punya guard `if (sessionStore.get(ownerJid)) return`, session lama yang valid tidak di-overwrite dengan session baru.
+
+### Behavior
+- Sebelumnya: bot restart atau reconnect → semua session ID di memory hilang → bot buat session baru untuk semua JID padahal session lama di server masih aktif → percakapan mulai dari awal, persona perlu di-warmup ulang, histori konteks Qwen hilang.
+- Sekarang: bot restart → `loadFromDb()` → session lama kembali ke memory → semua JID (owner, user, grup, `proactive_analysis_*`) langsung continue dari session sebelumnya tanpa warmup ulang. Session proactive per JID juga ikut persisten — poin 2 dari permintaan (session berbeda per JID di proactiveService) otomatis terselesaikan.
+
+---
+
+
 
 ### Added
 - `services/contextEnricher.js` — service baru yang menggabungkan **Fitur 6 (Event Awareness)** dan **Fitur 3 (Time-Aware Greeting)** menjadi satu blok konteks siap injeksi untuk `proactiveService`.
@@ -33,6 +92,27 @@ buildEnrichedContext()
            ↓
   Satu blok teks diinjeksi ke buildAnalysisPrompt()
 ```
+
+---
+
+## [4.1.0] — 2026-05-20
+
+### Added
+- `services/contextEnricher.js` — service baru yang menggabungkan **Fitur 6 (Event Awareness)** dan **Fitur 3 (Time-Aware Greeting)** menjadi satu blok konteks siap injeksi untuk `proactiveService`.
+
+**Fitur 3 · Time-Aware Greeting:**
+- `getTimeContext()` — deteksi waktu lokal user (WIB, UTC+7): pagi/siang/sore/malam/larut malam + rekomendasi tone
+- `analyzeActivityPattern(history)` — analisa jam puncak keaktifan user dari `chatHistory`, deteksi absen (biasanya aktif jam ini tapi belum ada pesan hari ini)
+- `formatTimeContext(history)` → string blok siap injeksi
+
+**Fitur 6 · Event Awareness:**
+- `NATIONAL_EVENTS` — 12 hari besar nasional/internasional
+- `checkNationalEvents()` — cek hari ini dan besok
+- `checkPersonalEvents(userProfile)` — cocokkan `goals` dengan keyword event personal (wisuda, ujian, ulang tahun, dll)
+- `formatEventContext(userProfile)` → string blok siap injeksi
+
+**Public API:**
+- `buildEnrichedContext({ history, userProfile, followUps })` — gabungkan semua konteks menjadi satu string untuk diinjeksi ke `buildAnalysisPrompt()`
 
 ---
 

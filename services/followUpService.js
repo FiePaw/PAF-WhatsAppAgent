@@ -223,6 +223,10 @@ Balas HANYA dengan teks pesan. Tidak ada penjelasan lain.`;
     await sock.sendMessage(jid, { text: message.trim() });
     await markFollowUpDone(event._id);
 
+    // Catat waktu kirim ke proactiveState untuk cooldown
+    const { recordSent } = await import('./proactiveService.js');
+    await recordSent(jid).catch(() => {});
+
     logger.info({ jid, event: eventDesc, preview: message.slice(0, 60) }, '📤 followUp: pesan follow-up terkirim');
   } catch (err) {
     logger.error({ jid, err: err.message }, '❌ followUp: gagal kirim follow-up');
