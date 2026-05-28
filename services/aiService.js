@@ -465,7 +465,7 @@ export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, a
         jid,
         userText,
         systemPrompt: wrappedSystemPrompt,
-        thinkMode: thinkMode || 'fast',
+        thinkMode: thinkMode || 'auto',
         attachments,
         taskType: 'chat',
         model,
