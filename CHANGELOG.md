@@ -5,6 +5,85 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [5.0.0] — 2026-05-28
+
+### Added
+- `services/aiService.js` — fungsi baru `askAISegmented({ jid, userText, systemPrompt, thinkMode, attachments, model })`: wrapper di atas `sendRequest()` yang menghasilkan **array segmen pesan** alih-alih satu string panjang.
+
+**Mekanisme:**
+- Meng-inject `SEGMENTED_SYSTEM_PREFIX` di awal `systemPrompt` yang ada — persona asli tetap utuh di bawahnya, tidak ada perubahan pada `persona.json`
+- Qwen diminta return JSON murni `{ "segments": [{ "text": "...", "delay": 1.5 }, ...] }` — Qwen yang memutuskan apakah perlu dipecah atau tidak, dan berapa delay tiap segmen (0.5–3.0 detik)
+- Segmen pertama selalu `delay: 0` (langsung composing)
+- Maksimal 5 segmen per reply
+- Mode `fast` (bukan `thinking`) — cukup untuk memecah teks secara natural
+- Retry 3x jika Qwen tidak return JSON yang valid — setiap retry `forceNew: true` agar tidak terkontaminasi jawaban gagal sebelumnya
+- Fallback: jika semua retry gagal, return `[{ text: rawResponse, delay: 0 }]` (1 segmen plain text) atau pesan error jika tidak ada response sama sekali
+
+- `utils/delay.js` — fungsi baru `replySegmented(sock, jid, segments, quotedMsg?)`: mengirim array segmen ke WhatsApp satu per satu dengan perilaku natural seperti manusia mengetik.
+
+**Flow tiap segmen:**
+```
+1. sleep(delay * 1000)          ← jeda antar segmen (segmen pertama: 0ms)
+2. sendPresenceUpdate composing  ← indikator "sedang mengetik"
+3. sleep(calcTypingDelay(text))  ← simulasi durasi mengetik berdasarkan panjang teks
+4. sendMessage({ text })         ← kirim pesan (hanya segmen pertama yang quote pesan asli)
+5. sendPresenceUpdate paused     ← selesai mengetik
+```
+
+### Changed
+- `core/messageHandler.js` — semua path AI chat beralih dari `askAI` + `reply` ke `askAISegmented` + `replySegmented`:
+  - **Owner DM**: `askAISegmented` + `replySegmented`. Teks gabungan semua segmen (`segments.map(s => s.text).join(' ')`) dicatat ke `chatHistory` sebagai satu entri.
+  - **Non-owner DM**: sama — `askAISegmented` + `replySegmented`.
+  - **Grup terdaftar (owner)**: sama — `askAISegmented` + `replySegmented`.
+  - Import `askAI` dihapus dari file ini (tidak lagi digunakan).
+
+- `services/statusService.js` — reply ke status WhatsApp beralih ke segmented:
+  - Import `askAI` dan `typingDelay` diganti dengan `askAISegmented` dan `replySegmented`
+  - `responseMessage` dihitung sebagai join semua segmen untuk keperluan pencatatan `chatHistory`
+
+- `services/botBrain.js` — pesan proaktif dan follow-up beralih ke segmented:
+  - Pesan dari `thinkAndActForJid` (keputusan Qwen tentang pesan proaktif) dikirim via `askAISegmented` + `replySegmented`
+  - `sendSingleFollowUp` beralih dari `askAI` + `sock.sendMessage` ke `askAISegmented` + `replySegmented`
+  - `sentMsgId` tidak lagi tersedia dari segmented reply (tidak mempengaruhi fungsionalitas utama — hanya tracking read receipt yang jadi `null`)
+
+### Not Changed
+- **Semua plugin** (command, triggered, scheduled) **tidak berubah** — tetap pakai `reply()` biasa. Segmentasi hanya berlaku untuk reply yang di-generate langsung oleh AI.
+- Internal AI calls di `botBrain` (update profil user, ekstrak follow-up, brain decision prompt, inject konteks session) tetap pakai `askAI` — tidak perlu segmentasi karena bukan pesan ke user.
+- `typingDelay` tetap ada dan dipakai oleh plugin via `reply()` helper seperti sebelumnya.
+
+### Behavior
+- Sebelumnya: bot selalu mengirim reply sebagai **satu blok teks** — bahkan untuk percakapan santai sekalipun terasa seperti mesin.
+- Sekarang: Qwen memecah reply secara natural seperti orang mengetik di WhatsApp. Contoh:
+
+```
+User: "kamu malu malu yaa?"
+Bot:  "emm.."              ← segmen 1, delay 0s   (langsung)
+Bot:  "aku enggak malu kok" ← segmen 2, delay 1.5s
+Bot:  "emang kamu gak keberatan?" ← segmen 3, delay 2.0s
+```
+
+- Reply singkat/lugas tetap dikirim sebagai 1 segmen — Qwen yang memutuskan kapan perlu dipecah.
+- Semua jenis reply (DM owner, DM non-owner, grup, status WA, pesan proaktif, follow-up) mendapat treatment yang sama.
+
+### Architecture
+```
+Pesan masuk → askAISegmented()
+  → inject SEGMENTED_SYSTEM_PREFIX ke depan systemPrompt
+  → sendRequest() → Qwen return JSON segmen
+  → parseSegments() → validasi & normalize
+  → retry 3x jika JSON invalid → fallback ke plain text
+
+replySegmented(sock, jid, segments, quotedMsg)
+  → for each segment:
+       sleep(delay)
+       composing indicator
+       sleep(typingDelay berdasarkan panjang teks)
+       sendMessage
+       paused indicator
+```
+
+---
+
 ## [4.3.0] — 2026-05-21
 
 ### Added
