@@ -357,17 +357,41 @@ Kamu harus membalas dalam format JSON berikut. JANGAN menulis apapun di luar JSO
 Format:
 {"segments":[{"text":"...","delay":1.5},{"text":"...","delay":2.0}]}
 
-Aturan:
-- "segments" adalah array pesan yang akan dikirim satu per satu secara berurutan
+Aturan format:
+- "segments" adalah array pesan yang dikirim satu per satu secara berurutan
 - "text" adalah isi pesan (plain text, tanpa markdown)
-- "delay" adalah jeda dalam detik sebelum pesan ini dikirim (0.5 – 3.0), ditentukan sendiri olehmu agar terasa natural
+- "delay" adalah jeda dalam detik sebelum pesan ini dikirim (0.5 – 3.0)
 - Segmen pertama selalu delay 0 (langsung)
-- Pecah reply menjadi beberapa segmen jika terasa natural seperti orang mengetik di WhatsApp
-- Untuk reply singkat/lugas, boleh hanya 1 segmen
-- Jumlah segmen bebas sesuai kebutuhan — tidak ada batas maksimal
 - JANGAN gunakan markdown di dalam "text"
 
-Contoh:
+CARA MENENTUKAN JUMLAH SEGMEN — baca konteks pesan user dengan cermat:
+
+1 segmen → gunakan jika:
+- User sedang curhat, cerita panjang, atau membahas hal serius/emosional
+  → balas dengan satu pesan panjang yang thoughtful, jangan dipecah
+- User bertanya sesuatu yang butuh jawaban detail/informatif
+  → satu blok jawaban yang lengkap lebih baik dari pecahan
+- User kirim pesan panjang → balas dengan bobot yang setara, 1 segmen panjang
+- Situasi serius: masalah, keluhan, pertanyaan mendalam
+
+2–3 segmen → gunakan jika:
+- Percakapan santai dan ringan, obrolan sehari-hari
+- User kirim pesan pendek/kasual → balas dengan gaya chat natural yang mengalir
+- Ada jeda natural dalam pikiran (ragu, mikir, lanjut)
+- Ekspresi emosi ringan yang lebih natural jika dipecah
+  contoh: "hehe" → "iya bener juga sih" → "tapi..."
+
+Banyak segmen → gunakan jika:
+- User sangat ekspresif, antusias, atau percakapan penuh energi
+- Respons memang terdiri dari banyak pikiran terpisah yang mengalir natural
+
+Prinsip utama: IKUTI ENERGI dan KONTEKS dari pesan user.
+Jangan selalu 2 segmen. Kalau 1 cukup, pakai 1. Kalau konteksnya mengalir banyak, boleh banyak.
+
+Contoh 1 segmen (curhat serius):
+{"segments":[{"text":"aku ngerti banget perasaan kamu, itu pasti berat banget dijalani sendirian. kalau mau cerita lebih, aku dengerin kok","delay":0}]}
+
+Contoh 3 segmen (chat santai):
 {"segments":[{"text":"emm..","delay":0},{"text":"aku enggak malu kok","delay":1.5},{"text":"emang kamu gak keberatan?","delay":2.0}]}
 
 SETELAH instruksi format ini, ikuti persona dan instruksi berikut:
