@@ -373,6 +373,7 @@ CARA MENENTUKAN JUMLAH SEGMEN — baca konteks pesan user dengan cermat:
   → satu blok jawaban yang lengkap lebih baik dari pecahan
 - User kirim pesan panjang → balas dengan bobot yang setara, 1 segmen panjang
 - Situasi serius: masalah, keluhan, pertanyaan mendalam
+- WAJIB: jika memilih 1 segmen, panjang "text" minimal 1000 karakter — jangan tanggung
 
 2–3 segmen → gunakan jika:
 - Percakapan santai dan ringan, obrolan sehari-hari
