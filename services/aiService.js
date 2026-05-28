@@ -364,7 +364,7 @@ Aturan:
 - Segmen pertama selalu delay 0 (langsung)
 - Pecah reply menjadi beberapa segmen jika terasa natural seperti orang mengetik di WhatsApp
 - Untuk reply singkat/lugas, boleh hanya 1 segmen
-- Maksimal 5 segmen per reply
+- Jumlah segmen bebas sesuai kebutuhan — tidak ada batas maksimal
 - JANGAN gunakan markdown di dalam "text"
 
 Contoh:
