@@ -10,10 +10,10 @@
 
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import { getAllKnownJids, getHistory, recordMessage } from './chatHistoryService.js';
-import { askAI } from './aiService.js';
+import { askAISegmented } from './aiService.js';
 import { getPersona } from './personaService.js';
 import { isOwner } from '../utils/helpers.js';
-import { typingDelay } from '../utils/delay.js';
+import { replySegmented } from '../utils/delay.js';
 import logger from '../utils/logger.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -232,9 +232,9 @@ export async function handleStatus(sock, msg) {
   // ── Step 3: Kirim ke Qwen untuk analisa dan generate pesan ────────────────
   const userPrompt = buildStatusPrompt({ senderJid, statusType, caption, history, owner });
 
-  let responseMessage;
+  let segments;
   try {
-    responseMessage = await askAI({
+    segments = await askAISegmented({
       jid: `status_${senderJid}`,   // session terpisah dari chat session utama
       userText: userPrompt,
       systemPrompt,
@@ -243,27 +243,26 @@ export async function handleStatus(sock, msg) {
     });
 
     logger.info(
-      { senderJid, preview: responseMessage?.slice(0, 60) },
-      '🧠 statusService: Qwen generate pesan untuk status'
+      { senderJid, preview: segments[0]?.text?.slice(0, 60), count: segments.length },
+      '🧠 statusService: Qwen generate segmen untuk status'
     );
   } catch (err) {
     logger.error({ senderJid, err: err.message }, '❌ statusService: gagal generate pesan dari Qwen');
     return;
   }
 
-  if (!responseMessage?.trim()) {
-    logger.warn({ senderJid }, '⚠️ statusService: Qwen tidak generate pesan, skip kirim');
+  if (!segments?.length) {
+    logger.warn({ senderJid }, '⚠️ statusService: Qwen tidak generate segmen, skip kirim');
     return;
   }
 
-  // ── Step 4: Kirim pesan ke sender ────────────────────────────────────────
+  // ── Step 4: Kirim segmen ke sender ────────────────────────────────────────
   try {
-    await typingDelay(sock, senderJid, responseMessage);
-    await sock.sendMessage(senderJid, { text: responseMessage.trim() }, { quoted: msg });
+    await replySegmented(global._sock || sock, senderJid, segments, msg);
 
     logger.info(
-      { senderJid, owner, preview: responseMessage.slice(0, 60) },
-      '📤 statusService: pesan terkirim ke sender status'
+      { senderJid, owner, segments: segments.length },
+      '📤 statusService: segmen terkirim ke sender status'
     );
   } catch (err) {
     logger.error({ senderJid, err: err.message }, '❌ statusService: gagal kirim pesan');
@@ -271,7 +270,7 @@ export async function handleStatus(sock, msg) {
   }
 
   // ── Step 5: Catat ke chatHistory ──────────────────────────────────────────
-  // Catat konteks status sebagai pesan user agar proactiveService bisa baca nanti
+  const responseMessage = segments.map((s) => s.text).join(' ');
   const statusNote = caption?.trim()
     ? `[Status ${statusType === 'image' ? 'foto' : statusType === 'video' ? 'video' : 'teks'}: "${caption.trim()}"]`
     : `[Status ${statusType === 'image' ? 'foto' : statusType === 'video' ? 'video' : 'teks'} tanpa caption]`;

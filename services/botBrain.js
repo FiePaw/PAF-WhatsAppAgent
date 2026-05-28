@@ -23,8 +23,9 @@
 import cronService from './cronService.js';
 import { getActiveJids, getAllKnownJids, getHistory, pruneAllOldMessages } from './chatHistoryService.js';
 import { getPresence, subscribePresence, subscribeAll } from './presenceService.js';
-import { askAI } from './aiService.js';
+import { askAI, askAISegmented } from './aiService.js';
 import { getPersona } from './personaService.js';
+import { replySegmented } from '../utils/delay.js';
 import db from './db.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
@@ -494,11 +495,23 @@ async function thinkAndActForJid(jid) {
     const sock = global._sock;
     if (sock) {
       try {
-        const result = await sock.sendMessage(jid, { text: decision.message.trim() });
-        sentMsgId = result?.key?.id ?? null;
-        logger.info({ jid, preview: decision.message.slice(0, 60) }, '📤 botBrain: pesan terkirim');
+        // Gunakan askAISegmented agar pesan proaktif juga terasa natural seperti manusia mengetik
+        const segments = await askAISegmented({
+          jid,
+          userText: decision.message.trim(),
+          systemPrompt,
+          model,
+        });
+
+        await replySegmented(sock, jid, segments);
+
+        // Untuk tracking read receipt, kirim sendMessage terakhir dan ambil ID-nya
+        // replySegmented sudah kirim semua segmen — ambil sentAt saja tanpa msgId
+        sentMsgId = null; // msgId tidak bisa diambil dari replySegmented secara langsung
+
+        logger.info({ jid, segments: segments.length, preview: decision.message.slice(0, 60) }, '📤 botBrain: pesan proaktif terkirim (segmented)');
       } catch (err) {
-        logger.error({ jid, err: err.message }, '❌ botBrain: gagal kirim pesan');
+        logger.error({ jid, err: err.message }, '❌ botBrain: gagal kirim pesan proaktif');
       }
     }
   }
@@ -562,29 +575,29 @@ Tulis SATU pesan follow-up natural, 1-2 kalimat. Jangan sebut "follow-up".
 Balas HANYA dengan teks pesan.`;
 
   try {
-    const message = await askAI({
+    const segments = await askAISegmented({
       jid: `brain_followup_${jid}`,
       userText: prompt,
       systemPrompt,
       forceNew: true,
     });
 
-    if (!message?.trim()) return;
+    if (!segments?.length) return;
 
     const sock = global._sock;
     if (!sock) return;
 
-    const result = await sock.sendMessage(jid, { text: message.trim() });
+    await replySegmented(sock, jid, segments);
     await markFollowUpDone(followUp._id);
 
-    const sentMsgId = result?.key?.id ?? null;
     await saveState(jid, {
       lastSentAt:    new Date().toISOString(),
-      lastSentMsgId: sentMsgId,
+      lastSentMsgId: null, // segmented tidak return msgId langsung
       lastReadAt:    null,
     });
 
-    logger.info({ jid, event: followUp.event, preview: message.slice(0, 60) }, '📤 botBrain: follow-up terkirim');
+    const preview = segments.map((s) => s.text).join(' ');
+    logger.info({ jid, event: followUp.event, preview: preview.slice(0, 60) }, '📤 botBrain: follow-up terkirim (segmented)');
   } catch (err) {
     logger.error({ jid, err: err.message }, '❌ botBrain: gagal kirim follow-up');
   }

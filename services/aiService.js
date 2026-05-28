@@ -344,6 +344,144 @@ Tulis deskripsi dalam Bahasa Indonesia, padat dan informatif (2-4 kalimat).`;
   }
 }
 
+// ─── Segmented Reply ──────────────────────────────────────────────────────────
+
+/**
+ * System prompt injeksi untuk segmented reply.
+ * Ditambahkan di awal system prompt yang sudah ada agar Qwen tahu
+ * harus return JSON segmen — persona asli tetap utuh di bawahnya.
+ */
+const SEGMENTED_SYSTEM_PREFIX = `INSTRUKSI FORMAT REPLY (WAJIB DIIKUTI):
+Kamu harus membalas dalam format JSON berikut. JANGAN menulis apapun di luar JSON.
+
+Format:
+{"segments":[{"text":"...","delay":1.5},{"text":"...","delay":2.0}]}
+
+Aturan:
+- "segments" adalah array pesan yang akan dikirim satu per satu secara berurutan
+- "text" adalah isi pesan (plain text, tanpa markdown)
+- "delay" adalah jeda dalam detik sebelum pesan ini dikirim (0.5 – 3.0), ditentukan sendiri olehmu agar terasa natural
+- Segmen pertama selalu delay 0 (langsung)
+- Pecah reply menjadi beberapa segmen jika terasa natural seperti orang mengetik di WhatsApp
+- Untuk reply singkat/lugas, boleh hanya 1 segmen
+- Maksimal 5 segmen per reply
+- JANGAN gunakan markdown di dalam "text"
+
+Contoh:
+{"segments":[{"text":"emm..","delay":0},{"text":"aku enggak malu kok","delay":1.5},{"text":"emang kamu gak keberatan?","delay":2.0}]}
+
+SETELAH instruksi format ini, ikuti persona dan instruksi berikut:
+---
+`;
+
+const MAX_SEGMENT_DELAY = 3.0;
+const MAX_RETRY = 3;
+
+/**
+ * Parse raw string dari Qwen menjadi array segmen yang valid.
+ * Return null jika gagal.
+ *
+ * @param {string} raw
+ * @returns {{ text: string, delay: number }[] | null}
+ */
+function parseSegments(raw) {
+  try {
+    // Bersihkan markdown fence jika ada
+    const cleaned = raw.replace(/```json|```/gi, '').trim();
+
+    // Cari JSON object pertama yang valid
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+
+    const parsed = JSON.parse(match[0]);
+
+    if (!Array.isArray(parsed.segments) || parsed.segments.length === 0) return null;
+
+    // Validasi dan normalize tiap segmen
+    const segments = parsed.segments
+      .filter((s) => s && typeof s.text === 'string' && s.text.trim())
+      .map((s, i) => ({
+        text: s.text.trim(),
+        // Segmen pertama selalu delay 0 (langsung composing)
+        delay: i === 0 ? 0 : Math.min(Math.max(parseFloat(s.delay) || 1.0, 0.5), MAX_SEGMENT_DELAY),
+      }));
+
+    return segments.length > 0 ? segments : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Kirim pesan ke AI dan return array segmen untuk dikirim satu per satu.
+ * Retry hingga MAX_RETRY kali jika Qwen tidak return JSON valid.
+ * Fallback: return 1 segmen dengan teks mentah jika semua retry gagal.
+ *
+ * @param {object} options — sama dengan askAI
+ * @param {string}  options.jid
+ * @param {string}  options.userText
+ * @param {string}  [options.systemPrompt]
+ * @param {string}  [options.thinkMode]
+ * @param {Array}   [options.attachments]
+ * @param {string}  [options.model]
+ * @returns {Promise<{ text: string, delay: number }[]>}
+ */
+export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, attachments, model }) {
+  // Inject instruksi segmentasi di depan system prompt yang ada
+  const wrappedSystemPrompt = systemPrompt
+    ? `${SEGMENTED_SYSTEM_PREFIX}${systemPrompt}`
+    : SEGMENTED_SYSTEM_PREFIX.trimEnd();
+
+  let lastRawResponse = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
+    try {
+      const { text } = await sendRequest({
+        jid,
+        userText,
+        systemPrompt: wrappedSystemPrompt,
+        thinkMode: thinkMode || 'fast',
+        attachments,
+        taskType: 'chat',
+        model,
+        // Retry ke-2+ paksa session baru agar tidak terkontaminasi jawaban salah sebelumnya
+        forceNew: attempt > 1,
+      });
+
+      lastRawResponse = text;
+      const segments = parseSegments(text);
+
+      if (segments) {
+        if (attempt > 1) {
+          logger.info({ jid, attempt }, '✅ askAISegmented: JSON valid setelah retry');
+        }
+        return segments;
+      }
+
+      logger.warn({ jid, attempt, preview: text?.slice(0, 80) }, `⚠️ askAISegmented: JSON tidak valid (attempt ${attempt}/${MAX_RETRY})`);
+    } catch (err) {
+      const status = err.response?.status;
+      logger.warn({ jid, attempt, err: err.message, status }, `⚠️ askAISegmented: error saat request (attempt ${attempt}/${MAX_RETRY})`);
+
+      // Session expired → hapus dan lanjut retry
+      if (status === 404) {
+        sessionStore.delete(jid);
+      }
+    }
+  }
+
+  // Semua retry gagal — fallback ke 1 segmen plain text
+  logger.error({ jid }, `❌ askAISegmented: ${MAX_RETRY}x retry gagal, fallback ke plain text`);
+
+  // Coba kirim teks mentah sebagai 1 segmen jika ada
+  if (lastRawResponse?.trim()) {
+    return [{ text: lastRawResponse.trim(), delay: 0 }];
+  }
+
+  // Benar-benar tidak ada response
+  return [{ text: '❌ Maaf, terjadi kesalahan. Coba lagi nanti.', delay: 0 }];
+}
+
 /**
  * Warm-up owner AI session saat bot start.
  * Kirim persona owner sebagai system prompt dengan dummy input ringan.

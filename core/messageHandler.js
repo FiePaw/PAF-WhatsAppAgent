@@ -2,8 +2,8 @@
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import config from '../config/config.js';
 import { isOwner, isCommand, parseCommand } from '../utils/helpers.js';
-import { typingDelay } from '../utils/delay.js';
-import { askAI, describeImage } from '../services/aiService.js';
+import { typingDelay, replySegmented } from '../utils/delay.js';
+import { askAISegmented, describeImage } from '../services/aiService.js';
 import { getPersona } from '../services/personaService.js';
 import { handleTriggeredPlugin } from './triggeredPluginHandler.js';
 import { getGroupChannel, getGroupPersona } from '../services/groupService.js';
@@ -192,13 +192,13 @@ export async function handleMessage(sock, msg, plugins) {
         })
       : Promise.resolve(false);
 
-    const groupAiPromise = askAI({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, model: groupModel }).catch((err) => {
+    const groupAiPromise = askAISegmented({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, model: groupModel }).catch((err) => {
       logger.error({ sender, jid, err: err.message }, 'Error saat request ke AI (group)');
       return null;
     });
 
     await Promise.race([
-      groupAiPromise.then(async (groupAiReply) => {
+      groupAiPromise.then(async (groupSegments) => {
         const intentAlreadyDone = await Promise.race([
           groupIntentPromise.then((v) => v),
           Promise.resolve('__pending__'),
@@ -211,8 +211,8 @@ export async function handleMessage(sock, msg, plugins) {
 
         if (!groupAiReplySent) {
           groupAiReplySent = true;
-          if (groupAiReply) {
-            await reply(groupAiReply);
+          if (groupSegments) {
+            await replySegmented(sock, jid, groupSegments, msg);
           } else {
             await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
           }
@@ -284,7 +284,7 @@ export async function handleMessage(sock, msg, plugins) {
       return false;
     });
 
-    const aiPromise = askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model }).catch((err) => {
+    const aiPromise = askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, model }).catch((err) => {
       logger.error({ sender, err: err.message }, 'Error saat request ke AI (parallel)');
       return null;
     });
@@ -292,16 +292,13 @@ export async function handleMessage(sock, msg, plugins) {
     // Race: siapapun yang selesai duluan diproses
     await Promise.race([
       // Cabang AI: selesai → langsung kirim jika intent belum handle
-      aiPromise.then(async (aiReply) => {
-        // Beri sedikit jeda agar intent yang hampir selesai bisa menang duluan
-        // Jika intentPromise sudah resolve (settled), cek hasilnya dulu
+      aiPromise.then(async (segments) => {
         const intentAlreadyDone = await Promise.race([
           intentPromise.then((v) => v),
           Promise.resolve('__pending__'),
         ]);
 
         if (intentAlreadyDone === true) {
-          // Intent sudah selesai dan terdeteksi — plugin sudah reply, skip AI
           logger.debug({ sender: sender.split('@')[0] }, '⚡ Intent sudah handle duluan, AI reply diabaikan');
           return;
         }
@@ -309,9 +306,11 @@ export async function handleMessage(sock, msg, plugins) {
         // Intent belum selesai atau null — kirim AI reply sekarang
         if (!aiReplySent) {
           aiReplySent = true;
-          if (aiReply) {
-            await reply(aiReply);
-            recordMessage({ jid, role: 'bot', text: aiReply, sender: 'bot' }).catch(() => {});
+          if (segments) {
+            // Catat segmen pertama ke chatHistory sebagai konteks
+            const fullText = segments.map((s) => s.text).join(' ');
+            await replySegmented(sock, jid, segments, msg);
+            recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});
           } else {
             await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
           }
@@ -321,7 +320,7 @@ export async function handleMessage(sock, msg, plugins) {
       // Cabang intent: selesai → jika terdeteksi, plugin sudah reply; tandai agar AI tidak ikut reply
       intentPromise.then((intentHandled) => {
         if (intentHandled) {
-          aiReplySent = true; // blokir AI reply yang mungkin menyusul
+          aiReplySent = true;
           logger.debug({ sender: sender.split('@')[0] }, '⚡ Intent terdeteksi duluan, AI reply akan diabaikan');
         }
       }),
@@ -346,9 +345,10 @@ export async function handleMessage(sock, msg, plugins) {
   }
 
   try {
-    const aiReply = await askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model });
-    await reply(aiReply);
-    recordMessage({ jid, role: 'bot', text: aiReply, sender: 'bot' }).catch(() => {});
+    const segments = await askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, model });
+    const fullText = segments.map((s) => s.text).join(' ');
+    await replySegmented(sock, jid, segments, msg);
+    recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});
   } catch (err) {
     logger.error({ sender, err: err.message }, 'Error saat request ke AI');
     await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
