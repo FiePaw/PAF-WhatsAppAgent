@@ -12,9 +12,6 @@ import { loadPlugins } from './pluginLoader.js';
 import { loadScheduledPlugins } from './scheduledPluginLoader.js';
 import { handleMessage } from './messageHandler.js';
 import { initOwnerIntentSession } from '../services/intentSessionService.js';
-import { warmupOwnerSession } from '../services/aiService.js';
-import { getPersona } from '../services/personaService.js';
-import { listGroupsWithPersona } from '../services/groupService.js';
 import { initBotBrain, handleReceiptUpdate, onNewJid } from '../services/botBrain.js';
 import { pruneAllOldMessages, getAllKnownJids } from '../services/chatHistoryService.js';
 import { updatePresence } from '../services/presenceService.js';
@@ -130,40 +127,12 @@ export async function startBot() {
       }
 
       // ── Load AI sessions dari DB (persist survive restart) ────────────────
-      // Harus dipanggil sebelum warmup agar session lama yang masih valid
-      // tidak di-overwrite dengan session baru yang tidak perlu.
       await sessionStore.loadFromDb();
       logger.info({ sessions: sessionStore.size() }, '📦 AI sessions dimuat dari DB');
 
       // ── Init intent session untuk owner ───────────────────────────────────
       // Session persisten di Qwen untuk deteksi intent setiap pesan owner
       await initOwnerIntentSession();
-
-      // ── Warmup owner AI session dengan persona ────────────────────────────
-      // Persona owner dikirim ke Qwen saat bot start sehingga sesi AI
-      // sudah punya konteks persona sejak percakapan pertama.
-      const ownerJid = config.ownerLid || config.ownerJid;
-      if (ownerJid) {
-        const { prompt: ownerPrompt, model: ownerModel } = getPersona(ownerJid, true);
-        if (ownerPrompt) {
-          await warmupOwnerSession(ownerJid, ownerPrompt, ownerModel);
-        }
-      }
-
-      // ── Warmup AI session untuk setiap grup yang punya persona ───────────
-      // Setiap grup dengan persona di-warmup secara paralel.
-      // Session key pakai groupJid agar terpisah dari session DM owner.
-      const groupsWithPersona = listGroupsWithPersona();
-      if (groupsWithPersona.length > 0) {
-        logger.info({ count: groupsWithPersona.length }, '🔥 Warming up group persona sessions...');
-        await Promise.allSettled(
-          groupsWithPersona.map(({ groupJid, name, persona }) =>
-            warmupOwnerSession(groupJid, persona, null) // grup tidak punya model khusus
-              .then(() => logger.info({ groupJid, name }, '✅ Group persona session siap'))
-              .catch((err) => logger.warn({ groupJid, name, err: err.message }, '⚠️ Gagal warmup group persona session'))
-          )
-        );
-      }
 
       // ── Start semua cron job yang sudah di-register plugins ───────────────
       cronService.startAll();
