@@ -100,12 +100,32 @@ export async function handleMessage(sock, msg, plugins) {
   const owner = isOwner(sender);
   const isGroup = jid.endsWith('@g.us');
 
+  // ── Ekstrak quoted message (reply bubble) ─────────────────────────────────
+  // Ambil teks dari pesan yang di-reply user, dari semua kemungkinan tipe pesan
+  const contextInfo =
+    msg.message?.extendedTextMessage?.contextInfo ||
+    msg.message?.imageMessage?.contextInfo ||
+    msg.message?.videoMessage?.contextInfo ||
+    null;
+
+  const quotedText =
+    contextInfo?.quotedMessage?.conversation ||
+    contextInfo?.quotedMessage?.extendedTextMessage?.text ||
+    contextInfo?.quotedMessage?.imageMessage?.caption ||
+    contextInfo?.quotedMessage?.videoMessage?.caption ||
+    null;
+
   // ── Ekstrak gambar jika ada ───────────────────────────────────────────────
   // attachments = null jika bukan gambar, array jika ada gambar
   const attachments = hasImage ? await extractImageAttachment(sock, msg) : null;
 
-  // Teks efektif untuk intent detection — placeholder jika gambar tanpa caption
-  const intentText = text.trim() || (hasImage ? '[gambar dikirim]' : '');
+  // ── Bangun intentText dengan konteks quote jika ada ───────────────────────
+  // Format: "[Reply: "<teks yang dikutip>"]\n<pesan user>"
+  // Ini memberi AI konteks pesan mana yang sedang dibalas user
+  const rawIntentText = text.trim() || (hasImage ? '[gambar dikirim]' : '');
+  const intentText = quotedText?.trim()
+    ? `[Reply: "${quotedText.trim()}"]\n${rawIntentText}`
+    : rawIntentText;
 
   // Helper untuk reply dengan typing delay anti-spam
   const reply = async (replyText) => {
@@ -114,7 +134,7 @@ export async function handleMessage(sock, msg, plugins) {
   };
 
   logger.info(
-    { jid, sender: sender.split('@')[0], owner, isGroup, hasImage, text: text.slice(0, 60) },
+    { jid, sender: sender.split('@')[0], owner, isGroup, hasImage, hasQuote: !!quotedText, text: text.slice(0, 60) },
     '📩 Pesan masuk'
   );
 
@@ -263,9 +283,9 @@ export async function handleMessage(sock, msg, plugins) {
   // Jika AI selesai duluan dan intent belum ada hasilnya → kirim AI reply,
   // intent tetap jalan di background untuk konteks & side-effect (inject ke chat session).
   if (owner) {
-    // Catat pesan teks natural owner ke chatHistory
-    if (text.trim()) {
-      recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
+    // Catat pesan teks natural owner ke chatHistory (dengan quote context jika ada)
+    if (text.trim() || quotedText) {
+      recordMessage({ jid, role: 'user', text: intentText, sender }).catch(() => {});
     }
 
     // Jika ada gambar → deskripsikan dan simpan ke chatHistory (fire-and-forget)
@@ -334,9 +354,9 @@ export async function handleMessage(sock, msg, plugins) {
   // ─── Non-owner: AI chat saja ─────────────────────────────────────────────
   const { prompt: systemPrompt, model } = getPersona(sender, owner);
 
-  // Catat pesan teks user ke chatHistory
-  if (text.trim()) {
-    recordMessage({ jid, role: 'user', text: text.trim(), sender }).catch(() => {});
+  // Catat pesan teks user ke chatHistory (dengan quote context jika ada)
+  if (text.trim() || quotedText) {
+    recordMessage({ jid, role: 'user', text: intentText, sender }).catch(() => {});
   }
 
   // Jika ada gambar → deskripsikan dan simpan ke chatHistory (fire-and-forget)
