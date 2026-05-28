@@ -15,7 +15,7 @@ import { initOwnerIntentSession } from '../services/intentSessionService.js';
 import { warmupOwnerSession } from '../services/aiService.js';
 import { getPersona } from '../services/personaService.js';
 import { listGroupsWithPersona } from '../services/groupService.js';
-import { initProactiveService } from '../services/proactiveService.js';
+import { initBotBrain, handleReceiptUpdate, onNewJid } from '../services/botBrain.js';
 import { pruneAllOldMessages, getAllKnownJids } from '../services/chatHistoryService.js';
 import { updatePresence } from '../services/presenceService.js';
 import { handleStatus } from '../services/statusService.js';
@@ -169,13 +169,11 @@ export async function startBot() {
       cronService.startAll();
       logger.info('📅 Semua cron job dijalankan');
 
-      // ── Init proactive service ────────────────────────────────────────────
-      // Cleanup chatHistory lama, ambil SEMUA JID yang pernah dikenal (persistent)
-      // untuk subscribe presence — bukan hanya yang aktif 2 hari terakhir.
+      // ── Init botBrain ─────────────────────────────────────────────────────
       await pruneAllOldMessages();
       const knownJids = getAllKnownJids();
-      await initProactiveService(knownJids);
-      logger.info({ knownJids: knownJids.length }, '🤖 Proactive service aktif');
+      await initBotBrain(knownJids);
+      logger.info({ knownJids: knownJids.length }, '🧠 botBrain aktif');
     }
   });
 
@@ -186,6 +184,13 @@ export async function startBot() {
   sock.ev.on('presence.update', ({ id, presences }) => {
     updatePresence(id, presences).catch((err) =>
       logger.warn({ id, err: err.message }, '⚠️ Gagal update presence')
+    );
+  });
+
+  // ─── Handle read receipt ─────────────────────────────────────────────────
+  sock.ev.on('message-receipt.update', (receipts) => {
+    handleReceiptUpdate(receipts).catch((err) =>
+      logger.warn({ err: err.message }, '⚠️ Gagal handle receipt update')
     );
   });
 

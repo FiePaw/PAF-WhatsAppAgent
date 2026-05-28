@@ -9,9 +9,9 @@ import logger from '../utils/logger.js';
 // create_image       → minimal 180 detik
 // create_video       → minimal 300 detik
 const TASK_TIMEOUTS = {
-  chat:         480_000, // 8 menit
-  web_search:   480_000, // 5 menit
-  create_image: 600_000, // 10 menit
+  chat:         900_000, // 8 menit
+  web_search:   900_000, // 5 menit
+  create_image: 900_000, // 10 menit
   create_video: 900_000, // 15 menit
 };
 

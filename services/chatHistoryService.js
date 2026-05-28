@@ -29,11 +29,11 @@
 import db from './db.js';
 import logger from '../utils/logger.js';
 
-// Lazy import — hindari circular dependency dengan proactiveService
+// Lazy import — hindari circular dependency dengan botBrain
 let _onNewJid = null;
 async function getOnNewJid() {
   if (!_onNewJid) {
-    const mod = await import('./proactiveService.js');
+    const mod = await import('./botBrain.js');
     _onNewJid = mod.onNewJid;
   }
   return _onNewJid;

@@ -8,27 +8,8 @@ import { getPersona } from '../services/personaService.js';
 import { handleTriggeredPlugin } from './triggeredPluginHandler.js';
 import { getGroupChannel, getGroupPersona } from '../services/groupService.js';
 import { recordMessage } from '../services/chatHistoryService.js';
-import { buildUserProfile } from '../services/userProfileService.js';
-import { extractFollowUpEvents } from '../services/followUpService.js';
 import { getHistory } from '../services/chatHistoryService.js';
 import logger from '../utils/logger.js';
-
-/**
- * Jalankan analisa post-session setelah bot selesai reply.
- * Berjalan fire-and-forget — tidak memblokir proses chat utama.
- * - buildUserProfile: perbarui profil karakter user
- * - extractFollowUpEvents: deteksi event/rencana untuk di-follow-up
- *
- * @param {string} jid
- */
-function runPostSessionAnalysis(jid) {
-  // Ambil history terbaru (sudah include pesan yang baru saja dicatat)
-  const history = getHistory(jid);
-  if (!history?.length) return;
-
-  buildUserProfile(jid, history).catch(() => {});
-  extractFollowUpEvents(jid, history).catch(() => {});
-}
 
 /**
  * Jika pesan mengandung gambar, minta Qwen mendeskripsikan gambar tersebut
@@ -331,7 +312,6 @@ export async function handleMessage(sock, msg, plugins) {
           if (aiReply) {
             await reply(aiReply);
             recordMessage({ jid, role: 'bot', text: aiReply, sender: 'bot' }).catch(() => {});
-            runPostSessionAnalysis(jid);
           } else {
             await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
           }
@@ -369,7 +349,6 @@ export async function handleMessage(sock, msg, plugins) {
     const aiReply = await askAI({ jid: sender, userText: intentText, systemPrompt, attachments, model });
     await reply(aiReply);
     recordMessage({ jid, role: 'bot', text: aiReply, sender: 'bot' }).catch(() => {});
-    runPostSessionAnalysis(jid);
   } catch (err) {
     logger.error({ sender, err: err.message }, 'Error saat request ke AI');
     await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');

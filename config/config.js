@@ -21,7 +21,7 @@ const config = {
 
   // ─── AI API ──────────────────────────────────────────────────────────────
   ai: {
-    baseUrl: process.env.AI_API_URL || 'http://108.137.15.61:9000',
+    baseUrl: 'http://16.79.2.204:9000',
     model: process.env.AI_MODEL || 'qwen',
     timeout: 3000000, // 60 detik
   },
