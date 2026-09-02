@@ -19,11 +19,18 @@ const config = {
   botName: 'PAF',
   botPrefix: process.env.BOT_PREFIX || '!',
 
-  // ─── AI API ──────────────────────────────────────────────────────────────
+  // ─── AI API (PAF-Model gateway: DeepSeek + Qwen) ──────────────────────────
+  // Pembagian tugas:
+  //   - chatModel  → dipakai untuk semua chat/interaksi natural dengan user (DeepSeek)
+  //   - taskModel  → dipakai untuk intent detection, deskripsi gambar, generate
+  //                  gambar/video, web search, dan pesan chat yang mengandung
+  //                  gambar (DeepSeek butuh mode vision khusus, Qwen tidak)
+  // Nilai HARUS sesuai regex gateway: ^(deepseek|qwen)(?:\(accountX\))?$
   ai: {
-    baseUrl: 'http://16.79.2.204:9000',
-    model: process.env.AI_MODEL || 'qwen',
-    timeout: 3000000, // 60 detik
+    baseUrl: process.env.AI_API_URL || '',
+    chatModel: process.env.AI_CHAT_MODEL || 'deepseek',
+    taskModel: process.env.AI_TASK_MODEL || 'qwen',
+    timeout: 3000000,
   },
 
   // ─── Presence & Read Receipt ──────────────────────────────────────────────

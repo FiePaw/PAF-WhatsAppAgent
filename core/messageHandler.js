@@ -197,8 +197,7 @@ export async function handleMessage(sock, msg, plugins) {
     const groupPersona = getGroupPersona(jid);
     const ownerPersonaObj = getPersona(sender, owner);
     const groupSystemPrompt = groupPersona || ownerPersonaObj.prompt;
-    // Model: grup tidak punya model sendiri, pakai model dari persona owner sebagai fallback
-    const groupModel = ownerPersonaObj.model;
+    // Model dipilih otomatis oleh askAISegmented (deepseek untuk chat, qwen jika ada gambar)
 
     // AI chat diprioritaskan — langsung kirim begitu selesai.
     // Intent detection berjalan paralel di background; jika selesai duluan dan
@@ -212,7 +211,7 @@ export async function handleMessage(sock, msg, plugins) {
         })
       : Promise.resolve(false);
 
-    const groupAiPromise = askAISegmented({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, model: groupModel }).catch((err) => {
+    const groupAiPromise = askAISegmented({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments }).catch((err) => {
       logger.error({ sender, jid, err: err.message }, 'Error saat request ke AI (group)');
       return null;
     });
@@ -294,7 +293,7 @@ export async function handleMessage(sock, msg, plugins) {
     }
 
     const ctx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply, attachments };
-    const { prompt: systemPrompt, model } = getPersona(sender, owner);
+    const { prompt: systemPrompt } = getPersona(sender, owner);
 
     let aiReplySent = false;
 
@@ -304,7 +303,7 @@ export async function handleMessage(sock, msg, plugins) {
       return false;
     });
 
-    const aiPromise = askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, model }).catch((err) => {
+    const aiPromise = askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments }).catch((err) => {
       logger.error({ sender, err: err.message }, 'Error saat request ke AI (parallel)');
       return null;
     });
@@ -352,7 +351,7 @@ export async function handleMessage(sock, msg, plugins) {
   }
 
   // ─── Non-owner: AI chat saja ─────────────────────────────────────────────
-  const { prompt: systemPrompt, model } = getPersona(sender, owner);
+  const { prompt: systemPrompt } = getPersona(sender, owner);
 
   // Catat pesan teks user ke chatHistory (dengan quote context jika ada)
   if (text.trim() || quotedText) {
@@ -365,7 +364,7 @@ export async function handleMessage(sock, msg, plugins) {
   }
 
   try {
-    const segments = await askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, model });
+    const segments = await askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments });
     const fullText = segments.map((s) => s.text).join(' ');
     await replySegmented(sock, jid, segments, msg);
     recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});

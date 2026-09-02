@@ -211,7 +211,7 @@ function formatNewsMessage(data) {
 async function sendEconomicNews() {
   logger.info('📰 Menjalankan scheduled economic news...');
 
-  // Ambil berita dari Qwen dalam format JSON
+  // Ambil berita dari Qwen (task background, butuh web_search) dalam format JSON
   let rawContent;
   try {
     rawContent = await askAI({
@@ -219,6 +219,7 @@ async function sendEconomicNews() {
       userText: 'Berikan update berita ekonomi sekarang. Note: dengan data terupdate dari sumber utama yaitu tiktok, instagram, x.com, dan sumber berita online lainnya. jangan memberikan news sebelumnya yang sudah pernah kamu berikan. pastikan kirimkan sesuai format!',
       systemPrompt: NEWS_PROMPT,
       thinkMode: 'thinking',
+      model: config.ai.taskModel,
     });
   } catch (err) {
     logger.error({ err: err.message }, '❌ Gagal ambil berita ekonomi dari AI');
@@ -240,6 +241,7 @@ async function sendEconomicNews() {
         userText: 'PERINTAH ULANG: Balas HANYA dengan raw JSON sesuai format yang sudah ditentukan. DILARANG menulis teks, narasi, atau penjelasan apapun di luar JSON. Mulai langsung dengan karakter { dan akhiri dengan }.',
         systemPrompt: NEWS_PROMPT,
         thinkMode: 'thinking',
+        model: config.ai.taskModel,
       });
     } catch (err) {
       logger.error({ err: err.message }, '❌ Gagal ambil berita ekonomi dari AI (retry)');

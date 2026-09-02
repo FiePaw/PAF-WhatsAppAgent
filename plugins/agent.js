@@ -31,8 +31,9 @@ const plugin = {
         text += `💬 Chat Sessions: ${chatSessions}\n`;
         text += `🔍 Intent Sessions: ${intentSessions}\n`;
         text += `🔑 Owner: ${config.ownerNumber}\n`;
-        text += `🔧 AI Model: ${config.ai.model}\n`;
-        text += `🌍 API URL: ${config.ai.baseUrl}`;
+        text += `🔧 Chat Model: ${config.ai.chatModel}\n`;
+        text += `🔧 Task Model: ${config.ai.taskModel}\n`;
+        text += `🌍 API URL: ${config.ai.baseUrl || '(belum diset)'}`;
 
         await reply(text);
         break;

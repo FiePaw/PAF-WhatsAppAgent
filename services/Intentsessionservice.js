@@ -3,16 +3,22 @@
 //
 // Skenario:
 //   Bot start → initIntentSession() dipanggil → build system prompt dari base + definisi plugin
-//   → kirim ke Qwen → Qwen buat session baru → simpan X-Session-ID sebagai "intent session"
+//   → kirim ke Qwen (config.ai.taskModel) → Qwen buat session baru → simpan
+//   X-Session-ID sebagai "intent session"
 //   Setiap pesan masuk dari owner/user → kirim ke session ini dengan X-Session-ID
 //   → Qwen punya konteks percakapan lengkap saat mendeteksi intent
 //
-// Satu intent session per sender JID.
-// Session di-reinit otomatis jika server mengembalikan 404 (expired).
+// Satu intent session per sender JID. Selalu pakai Qwen — intent detection
+// bukan chat user-facing, jadi masuk kategori "tugas lain" (lihat diskusi
+// migrasi ke PAF-Model gateway).
+//
+// Catatan migrasi ke PAF-Model: gateway baru TIDAK mengembalikan 404 khusus
+// untuk session expired (lihat API_USAGE.md §12) — error yang mungkin
+// muncul adalah 400/422/500/502/504. Reinit dilakukan untuk error apapun,
+// bukan hanya 404.
 
 import axios from 'axios';
 import config from '../config/config.js';
-import { getIntentSessionModel } from './personaService.js';
 import logger from '../utils/logger.js';
 
 const client = axios.create({
@@ -89,11 +95,8 @@ export async function initIntentSession(senderJid) {
 
     const systemPrompt = await _buildSystemPrompt();
 
-    // Gunakan model khusus intent session jika diset di persona.json, fallback ke config
-    const intentModel = getIntentSessionModel() || config.ai.model;
-
     const res = await client.post('/v1/chat/completions', {
-      model: intentModel,
+      model: config.ai.taskModel,
       messages: [
         {
           role: 'user',
@@ -169,9 +172,8 @@ export async function detectIntentWithSession(senderJid, text, attachments = nul
 // ─── Internal: kirim ke session dengan auto-reinit jika 404 ──────────────
 async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false, attachments = null) {
   try {
-    const intentModel = getIntentSessionModel() || config.ai.model;
     const body = {
-      model: intentModel,
+      model: config.ai.taskModel,
       messages: [{ role: 'user', content: text }],
       stream: false,
       think_mode: 'fast',
@@ -214,9 +216,12 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
   } catch (err) {
     const status = err.response?.status;
 
-    // Session expired di server → reinit sekali
-    if (status === 404 && !isRetry) {
-      logger.warn({ senderJid }, '⚠️ Intent session expired di server, reinit...');
+    // PAF-Model gateway tidak punya kode error khusus untuk "session expired"
+    // (lihat API_USAGE.md §12: hanya 400/422/500/502/504). Jadi untuk error
+    // apapun yang bukan retry, kita coba reinit sekali sebagai fallback —
+    // siapa tahu penyebabnya memang session yang sudah tidak valid di server.
+    if (!isRetry) {
+      logger.warn({ senderJid, status, err: err.message }, '⚠️ Intent session error, coba reinit sekali...');
       _store.delete(senderJid);
       resetSystemPromptCache();
       const newSessionId = await initIntentSession(senderJid);
@@ -224,7 +229,7 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
       return await _sendToIntentSession(senderJid, newSessionId, text, true, attachments);
     }
 
-    logger.warn({ senderJid, err: err.message }, '⚠️ Intent session error, fallback null');
+    logger.warn({ senderJid, status, err: err.message }, '⚠️ Intent session error setelah reinit, fallback null');
     return { intent: null, params: {} };
   }
 }

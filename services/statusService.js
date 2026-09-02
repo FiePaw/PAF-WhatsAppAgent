@@ -227,9 +227,11 @@ export async function handleStatus(sock, msg) {
 
   // ── Step 2: Ambil chatHistory dan persona sender ───────────────────────────
   const history = getHistory(senderJid);
-  const { prompt: systemPrompt, model } = getPersona(senderJid, owner);
+  const { prompt: systemPrompt } = getPersona(senderJid, owner);
 
-  // ── Step 3: Kirim ke Qwen untuk analisa dan generate pesan ────────────────
+  // ── Step 3: Kirim ke AI untuk analisa dan generate pesan ──────────────────
+  // Model dipilih otomatis oleh askAISegmented: qwen jika ada attachments
+  // (foto/video thumbnail status), deepseek jika status teks saja.
   const userPrompt = buildStatusPrompt({ senderJid, statusType, caption, history, owner });
 
   let segments;
@@ -239,15 +241,14 @@ export async function handleStatus(sock, msg) {
       userText: userPrompt,
       systemPrompt,
       attachments,
-      model,
     });
 
     logger.info(
       { senderJid, preview: segments[0]?.text?.slice(0, 60), count: segments.length },
-      '🧠 statusService: Qwen generate segmen untuk status'
+      '🧠 statusService: AI generate segmen untuk status'
     );
   } catch (err) {
-    logger.error({ senderJid, err: err.message }, '❌ statusService: gagal generate pesan dari Qwen');
+    logger.error({ senderJid, err: err.message }, '❌ statusService: gagal generate pesan dari AI');
     return;
   }
 

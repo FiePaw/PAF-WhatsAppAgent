@@ -4,20 +4,27 @@
 //
 // Struktur persona.json yang didukung:
 //
-//   Format BARU (object dengan prompt + model opsional):
-//     "owner":   { "prompt": "...", "model": "account1" }
+//   Format BARU (object dengan prompt; field "model" lama tetap dibaca untuk
+//   kompatibilitas data tapi TIDAK DIPAKAI lagi untuk memilih model AI):
+//     "owner":   { "prompt": "..." }
 //     "default": { "prompt": "..." }
-//     "users":   { "628xxx": { "prompt": "...", "model": "account6" } }
-//     "intentSession": { "model": "account2" }  ← model khusus untuk intent session
+//     "users":   { "628xxx": { "prompt": "..." } }
 //
 //   Format LAMA (string langsung) — tetap kompatibel:
 //     "owner":   "prompt string..."
 //     "default": "prompt string..."
 //     "users":   { "628xxx": "prompt string..." }
 //
-// getPersona()      → { prompt: string, model: string|null }
+// ⚠️ Sejak migrasi ke PAF-Model gateway (DeepSeek + Qwen), model AI TIDAK
+// lagi ditentukan per-persona. Semua chat/interaksi natural selalu pakai
+// config.ai.chatModel (deepseek), dan semua tugas lain (intent detection,
+// deskripsi/generate gambar, generate video, web search) selalu pakai
+// config.ai.taskModel (qwen). Field "model" di persona.json yang lama
+// (kalau masih ada) diabaikan oleh aiService — biarkan saja, tidak perlu
+// dihapus manual dari file.
+//
+// getPersona()      → { prompt: string, model: string|null }  (model hanya informasional)
 // getPersonaPrompt()→ string (untuk backward compat)
-// getPersonaModel() → string|null
 
 import { readFileSync, watchFile, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -100,19 +107,6 @@ export function getPersonaPrompt(senderJid, owner) {
 }
 
 /**
- * Ambil model khusus untuk intent session (key "intentSession" di persona.json).
- * Return null jika tidak diset — aiService akan fallback ke config.ai.model.
- *
- * @returns {string|null}
- */
-export function getIntentSessionModel() {
-  const entry = personaData.intentSession;
-  if (!entry) return null;
-  if (typeof entry === 'string') return null; // tidak ada model jika format lama
-  return entry.model || null;
-}
-
-/**
  * Simpan / update persona untuk satu user ke persona.json.
  * Jika entry lama sudah object, pertahankan model-nya.
  *
@@ -192,9 +186,6 @@ export function listPersonas() {
   return {
     owner: fmt(personaData.owner) || '(tidak diset)',
     default: fmt(personaData.default) || '(tidak diset)',
-    intentSession: personaData.intentSession?.model
-      ? `model: ${personaData.intentSession.model}`
-      : '(model default)',
     users: formatted,
   };
 }

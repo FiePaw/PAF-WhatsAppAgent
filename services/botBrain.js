@@ -180,11 +180,13 @@ Balas HANYA dengan JSON valid (tanpa komentar, tanpa markdown backtick):
 }`;
 
   try {
+    // Task analisis/ekstraksi JSON di background → Qwen (config.ai.taskModel)
     const raw = await askAI({
       jid: `profile_builder_${jid}`,
       userText: prompt,
       systemPrompt: 'Kamu adalah sistem ekstraksi profil. Balas HANYA dengan JSON valid. Tidak ada teks lain.',
       forceNew: true,
+      model: config.ai.taskModel,
     });
 
     const profile = JSON.parse(raw.replace(/```json|```/gi, '').trim());
@@ -259,11 +261,13 @@ Balas HANYA dengan JSON valid:
 { "events": [{ "event": "deskripsi", "context": "kutipan", "followUpAt": "ISO" }] }`;
 
   try {
+    // Task analisis/ekstraksi JSON di background → Qwen (config.ai.taskModel)
     const raw = await askAI({
       jid: `followup_extractor_${jid}`,
       userText: prompt,
       systemPrompt: 'Kamu adalah sistem deteksi event. Balas HANYA dengan JSON valid. Tidak ada teks lain.',
       forceNew: true,
+      model: config.ai.taskModel,
     });
 
     const result = JSON.parse(raw.replace(/```json|```/gi, '').trim());
@@ -436,7 +440,7 @@ async function thinkAndActForJid(jid) {
 
   const ownerJid   = config.ownerLid || config.ownerJid;
   const isOwnerJid = jid === ownerJid;
-  const { prompt: systemPrompt, model } = getPersona(jid, isOwnerJid);
+  const { prompt: systemPrompt } = getPersona(jid, isOwnerJid);
   const presence   = getPresence(jid);
 
   // ── Cek follow-up due ─────────────────────────────────────────────────────
@@ -471,10 +475,12 @@ async function thinkAndActForJid(jid) {
 
   let decision;
   try {
+    // Keputusan holistik (JSON) di background → Qwen (config.ai.taskModel)
     const raw = await askAI({
       jid: `brain_${jid}`,
       userText: prompt,
       systemPrompt: 'Kamu adalah sistem keputusan percakapan WhatsApp. Buat keputusan holistik terbaik. Balas HANYA dengan JSON valid sesuai format.',
+      model: config.ai.taskModel,
     });
 
     decision = JSON.parse(raw.replace(/```json|```/gi, '').trim());
@@ -496,11 +502,11 @@ async function thinkAndActForJid(jid) {
     if (sock) {
       try {
         // Gunakan askAISegmented agar pesan proaktif juga terasa natural seperti manusia mengetik
+        // Pakai session chat yang sama dengan `jid` → otomatis deepseek (chatModel), konsisten
         const segments = await askAISegmented({
           jid,
           userText: decision.message.trim(),
           systemPrompt,
-          model,
         });
 
         await replySegmented(sock, jid, segments);
@@ -537,10 +543,12 @@ async function thinkAndActForJid(jid) {
   }
 
   // ── Inject konteks ke session chat JID ────────────────────────────────────
+  // Pakai session yang sama dengan jid → harus konsisten dengan backend yang
+  // dipakai sesi chat tsb (default deepseek, tidak override model di sini)
   try {
     const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
     const contextMsg = `[SISTEM - BotBrain Report @ ${now}]\nKontak: ${jid}\nRingkasan: ${decision.contextSummary}\nAlasan: ${decision.reason}\n${decision.message?.trim() ? `Pesan dikirim: "${decision.message}"` : 'Tidak ada pesan dikirim'}`;
-    await askAI({ jid, userText: contextMsg, systemPrompt, model });
+    await askAI({ jid, userText: contextMsg, systemPrompt });
   } catch (err) {
     logger.warn({ jid, err: err.message }, '⚠️ botBrain: gagal inject konteks ke session');
   }
