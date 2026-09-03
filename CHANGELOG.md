@@ -5,6 +5,134 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [6.2.0] — 2026-09-03 (hotfix #2, hari yang sama)
+
+Ditemukan lewat log produksi: owner tanya "apa yang lu inget?" — sesi intent
+(Qwen, `services/intentSessionService.js`) jelas mengingat detail personal
+owner (karena hidup tanpa TTL sejak bot start), tapi balasan WhatsApp yang
+sebenarnya (dari sesi chat DeepSeek) generik/amnesia. Root cause: (1) sesi
+chat yang sedang berjalan sudah lama ada dari sebelum ada fakta baru
+tersimpan — injeksi memori HANYA terjadi saat sesi baru dimulai; (2) Memory
+Bank baru (`memoryService`) dan profil yang sudah diekstrak `botBrain`
+(`userProfiles`, siklus per jam) adalah dua sistem terpisah yang belum
+digabung — `formatMemoryForPrompt()` tidak ikut membawa data `userProfiles`.
+
+### Fixed
+- `services/memoryService.js` — `formatMemoryForPrompt()` sekarang
+  menggabungkan profil dari `userProfiles` (nickname, personality, hobbies,
+  topics, goals, sensitive, summary — hasil siklus `botBrain` per jam)
+  DENGAN memory bank atomik (`memories`) dan ringkasan sesi
+  (`sessionSummaries`) yang sudah ada. Sebelumnya hanya baca dua collection
+  terakhir, sehingga fakta yang SUDAH diketahui bot lewat botBrain tidak
+  pernah muncul di system prompt sesi chat baru.
+
+### Added
+- `plugins/agent.js` — dua command baru (owner only):
+  - `!memories` — lihat isi Memory Bank (profil + fakta + ringkasan) untuk
+    debug/verifikasi apa yang benar-benar akan diinjeksi ke sesi baru.
+  - `!remember` — bootstrap Memory Bank SEKARANG dari chatHistory yang
+    sudah ada + reset sesi chat, tanpa perlu menunggu TTL 24 jam. Berguna
+    tepat untuk skenario di atas: paksa sesi baru langsung membawa memori
+    terbaru alih-alih menunggu sesi lama expired secara alami.
+
+---
+
+## [6.1.0] — 2026-09-03 (hotfix, hari yang sama)
+
+Fix produksi ditemukan tepat setelah [6.0.0] rilis: `askAISegmented` masih
+sering gagal ("JSON tidak valid") pada chatModel (DeepSeek) — bukan karena
+bug parsing, tapi karena model chat-tuned menolak patuh instruksi "wajib
+balas JSON" saat sedang menjawab natural (lihat contoh log: AI menjawab
+`"Halo juga fie! Ada yang bisa aku bantu?"` — jawaban natural yang benar,
+tapi bukan JSON). Retry dengan `forceNew: true` memperparah — tiap retry
+membuat SESI BARU (mahal + lambat, satu "haloo" bisa butuh 45 detik) tanpa
+menyelesaikan akar masalah karena kegagalannya sistematis, bukan acak.
+
+### Changed
+- **`askAISegmented` (`services/aiService.js`) migrasi total dari format
+  JSON ke plain-text + delimiter `###`** — bukan lagi
+  `{"segments":[{"text":...,"delay":...}]}`, sekarang AI cukup menulis
+  balasan natural dan menyisipkan baris `###` HANYA jika ingin dipecah jadi
+  beberapa bubble chat berurutan. Delay antar-segmen dihitung deterministik
+  di kode (`computeInterSegmentDelay`), bukan angka yang "dikarang" AI.
+- `parseSegments()` sekarang **tidak pernah gagal** — tanpa delimiter, teks
+  dianggap 1 segmen (default aman, bukan error). Retry-loop 3x untuk
+  "format tidak valid" **dihapus total**; retry yang tersisa (`MAX_NETWORK_RETRY = 2`)
+  hanya untuk error request/koneksi asli.
+- Dampak: 0 kemungkinan gagal-parse untuk flow ini, request AI per pesan
+  balik ke 1x (bukan sampai 3x), tidak ada lagi sesi browser terbuang
+  sia-sia karena retry.
+
+---
+
+## [6.0.0] — 2026-09-03
+
+Major update: migrasi ke revisi terbaru PAF-Model gateway (sesi tanpa TTL
+otomatis + tool-calling), memory bank jangka panjang, dan fix kritis
+deployment Linux.
+
+### Fixed
+- **Bug kritis case-sensitivity import** (blocker deploy di Linux/Docker):
+  `core/Triggeredpluginhandler.js` → `core/triggeredPluginHandler.js`,
+  `services/Intentsessionservice.js` → `services/intentSessionService.js`.
+  Semua import di kode sudah konsisten memakai camelCase, hanya nama file
+  fisik yang berbeda kapitalisasi — bekerja di macOS/Windows (case-insensitive
+  filesystem) tapi langsung `ERR_MODULE_NOT_FOUND` di Linux.
+- `services/aiService.js` diperbarui menyesuaikan revisi terbaru
+  `API_USAGE.md` (FiePaw/PAF-Model):
+  - Sesi AI **tidak lagi punya TTL otomatis di server** (§6.2.1) — bot
+    sekarang bertanggung jawab penuh atas lifecycle sesi (lihat perubahan
+    TTL & memory bank di bawah).
+  - `resetSession()` sekarang benar-benar menghapus sesi di **server** via
+    endpoint baru `DELETE /v1/sessions/{session_id}` (§4.5), bukan cuma
+    mapping lokal seperti sebelumnya.
+
+### Added
+- **Memory Bank jangka panjang** (`services/memoryService.js`) — bot kini
+  mengingat fakta-fakta penting tentang user/owner (`memories` collection,
+  atomik + kategori + importance, auto-dedup & auto-consolidate) dan
+  ringkasan tiap sesi yang berakhir (`sessionSummaries` collection). Memori
+  ini diinjeksi otomatis ke system prompt setiap kali sesi AI baru dimulai
+  — mengatasi "amnesia" bot setiap sesi/TTL/reset.
+- **TTL sesi jadi 24 jam rolling per-JID** (`config.sessionTtl`, sebelumnya
+  1 jam) — sesuai kenyataan baru bahwa sesi server tidak expired sendiri.
+  `services/sessionStore.js` sekarang meringkas percakapan ke memory bank
+  DAN menghapus sesi di server SEBELUM membuang mapping lokal saat TTL
+  tercapai.
+- **Migrasi ke tool/function-calling** (§9 API_USAGE.md) untuk semua task
+  background — menggantikan pola lama "minta AI balas raw JSON lalu
+  JSON.parse manual" yang rawan gagal ("JSON tidak valid"):
+  - `services/intentSessionService.js` — deteksi intent kini via `tools`
+    (satu tool per triggered plugin) + `tool_calls`, bukan raw JSON di teks.
+  - `services/botBrain.js` — profil user, ekstraksi follow-up, dan keputusan
+    proaktif kini via tool-calling (`askAITool`).
+  - `plugins/scheduled/economicNews.js` — berita ekonomi kini via tool
+    `report_economic_update` dengan field `sourceUrl` terpisah dari
+    `summary`, menghilangkan hack `sanitizeRawJson`/regex markdown-link lama.
+  - Utility baru `utils/toolCalling.js` (`buildFunctionTool`, `extractToolCall`).
+  - Kontrak triggered plugin bertambah field opsional `parameters` (JSON
+    Schema) — lihat `plugins/triggered/Sendmessage.js` dan `myFinance.js`
+    untuk contoh. Plugin lama tanpa `parameters` tetap jalan (fallback ke
+    schema generik).
+- `services/aiService.js` — fungsi baru `askAITool()` (wrapper tool-calling
+  reusable) dan `deleteRemoteSession()`.
+
+### Changed
+- Segmented Typing Reply (`askAISegmented`) diperkaya dengan **sinyal
+  konteks numerik** — panjang pesan user, jeda sejak pesan terakhir,
+  kecepatan chat 5 menit terakhir (dihitung di `core/messageHandler.js`
+  via `computeContextHints()`, dirender ke prompt via
+  `buildContextHintsBlock()`) — supaya AI memutuskan jumlah segmen
+  berdasarkan bukti nyata, bukan hanya menerka dari nada teks. Format JSON
+  segmen TIDAK berubah (masih `{"segments":[...]}`, bukan tool-calling).
+- `askAI`/`askAISegmented` menerima parameter baru `memoryJid` dan
+  `useMemory` untuk kontrol injeksi memory bank per-panggilan.
+- `mode_fallback: true` dari DeepSeek kini direspons aktif — trigger
+  `memoryService.summarizeAndRemember()` di background agar konteks yang
+  sempat ada tidak hilang percuma.
+
+---
+
 ## [5.0.0] — 2026-05-28
 
 ### Added

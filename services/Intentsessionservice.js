@@ -2,23 +2,41 @@
 // Dedicated session store untuk intent detection — terpisah dari chat session.
 //
 // Skenario:
-//   Bot start → initIntentSession() dipanggil → build system prompt dari base + definisi plugin
-//   → kirim ke Qwen (config.ai.taskModel) → Qwen buat session baru → simpan
-//   X-Session-ID sebagai "intent session"
-//   Setiap pesan masuk dari owner/user → kirim ke session ini dengan X-Session-ID
-//   → Qwen punya konteks percakapan lengkap saat mendeteksi intent
+//   Bot start → initIntentSession() dipanggil → build daftar tools dari
+//   triggered plugins → kirim ke Qwen (config.ai.taskModel) dengan `tools`
+//   (function-calling, lihat API_USAGE.md §9) → Qwen buat session baru →
+//   simpan X-Session-ID sebagai "intent session"
+//   Setiap pesan masuk dari owner/user → kirim ke session ini dengan
+//   X-Session-ID + `tools` yang sama → Qwen punya konteks percakapan
+//   lengkap saat mendeteksi intent, dan MEMANGGIL tool yang sesuai jika
+//   ada aksi nyata (bukan lagi menulis raw JSON bebas di teks).
+//
+// ─── Migrasi dari raw-JSON ke tool-calling (§9 API_USAGE.md) ─────────────
+//   Sebelumnya: system prompt menyuruh Qwen balas HANYA raw JSON
+//   `{"intent": "...", "params": {...}}` — rawan gagal parse ("JSON tidak
+//   valid") karena bergantung pada disiplin model menulis JSON bebas di
+//   tengah teks percakapan.
+//   Sekarang: setiap triggered plugin mendaftarkan dirinya sebagai SATU
+//   function/tool (nama = intent, parameters = JSON Schema dari
+//   plugin.parameters). Qwen memanggil tool yang sesuai via `tool_calls`
+//   yang sudah diparse & divalidasi bentuknya oleh gateway sendiri — kita
+//   tidak perlu regex/JSON.parse manual atas teks bebas lagi. Jika tidak
+//   ada aksi yang perlu dilakukan, Qwen cukup TIDAK memanggil tool apapun.
 //
 // Satu intent session per sender JID. Selalu pakai Qwen — intent detection
-// bukan chat user-facing, jadi masuk kategori "tugas lain" (lihat diskusi
-// migrasi ke PAF-Model gateway).
+// bukan chat user-facing, jadi masuk kategori "tugas lain".
 //
-// Catatan migrasi ke PAF-Model: gateway baru TIDAK mengembalikan 404 khusus
-// untuk session expired (lihat API_USAGE.md §12) — error yang mungkin
-// muncul adalah 400/422/500/502/504. Reinit dilakukan untuk error apapun,
-// bukan hanya 404.
+// Catatan migrasi PAF-Model: gateway TIDAK mengembalikan 404 khusus untuk
+// session expired (lihat API_USAGE.md §12) — error yang mungkin muncul
+// adalah 400/422/500/502/504. Reinit dilakukan untuk error apapun, bukan
+// hanya 404. Juga: sesi TIDAK punya TTL otomatis lagi (§6.2.1) — tapi
+// intent session ini kita anggap "seumur proses bot" (di-reinit hanya saat
+// error), bukan dikelola lewat sessionStore/config.sessionTtl seperti sesi
+// chat biasa.
 
 import axios from 'axios';
 import config from '../config/config.js';
+import { extractToolCall } from '../utils/toolCalling.js';
 import logger from '../utils/logger.js';
 
 const client = axios.create({
@@ -27,64 +45,64 @@ const client = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// ─── In-memory store intent session ──────────────────────────────────────
+// ─── In-memory store intent session ─────────────────────────────────────
 // Map<senderJid, sessionId>
 const _store = new Map();
 
-// ─── Cache system prompt yang sudah di-build ──────────────────────────────
+// ─── Cache tools + system prompt yang sudah di-build ────────────────────
 // Di-build sekali saat initOwnerIntentSession() pertama kali dipanggil,
 // lalu dipakai ulang untuk semua session berikutnya.
 let _cachedSystemPrompt = null;
+let _cachedTools = null;
 
-// ─── Base system prompt ───────────────────────────────────────────────────
-// Mendefinisikan PERAN dan FORMAT output Qwen dalam session ini.
-// Daftar intent di-inject secara dinamis dari triggered plugins.
-const BASE_PROMPT = `Kamu adalah intent detector yang terintegrasi dalam percakapan WhatsApp. Tugasmu adalah memantau setiap pesan dari owner dan menentukan apakah pesan tersebut mengandung instruksi aksi nyata yang harus dieksekusi oleh bot. Untuk setiap pesan yang kamu terima, balas HANYA dengan raw JSON tanpa markdown tanpa backtick tanpa penjelasan. Jika ada intent: {"intent":"namaIntent","params":{...}}. Jika tidak ada intent atau informasi tidak cukup: {"intent":null,"params":{}}. Kamu tidak boleh membalas dengan teks percakapan biasa dalam session ini, selalu JSON.`;
+// ─── Base system prompt ──────────────────────────────────────────────────
+// Mendefinisikan PERAN Qwen dalam session ini: pantau pesan, panggil tool
+// yang sesuai jika ada aksi nyata, atau tidak melakukan apapun jika tidak.
+const BASE_PROMPT = `Kamu adalah intent detector yang terintegrasi dalam percakapan WhatsApp. Tugasmu adalah memantau setiap pesan dari owner dan menentukan apakah pesan tersebut mengandung instruksi aksi nyata yang harus dieksekusi oleh bot. Kamu punya akses ke sejumlah tools/function — panggil TEPAT SATU tool yang paling sesuai jika pesan mengandung instruksi aksi nyata dan informasinya cukup untuk mengisi parameter tool tersebut. Jika pesan TIDAK mengandung instruksi aksi, atau informasi belum cukup untuk memanggil tool manapun dengan yakin, JANGAN memanggil tool apapun — cukup balas dengan teks singkat apa saja (balasan teks ini tidak akan ditampilkan ke siapapun, hanya dianggap "tidak ada aksi").`;
 
-// ─── Build system prompt ──────────────────────────────────────────────────
+// ─── Build daftar tools dari triggered plugins ──────────────────────────
 /**
- * Build final system prompt dengan mengagregasi intentDefinition dari semua triggered plugin.
- * Import getIntentDefinitions() dilakukan secara lazy (bukan top-level) untuk menghindari
- * circular dependency — triggeredPluginHandler import intentSessionService,
- * jadi intentSessionService tidak boleh import triggeredPluginHandler di top-level.
+ * Build daftar `tools` (function-calling, §9 API_USAGE.md) dari semua
+ * triggered plugin yang sudah di-load, plus system prompt dasarnya.
+ * Import getIntentToolSchemas() dilakukan secara lazy (bukan top-level)
+ * untuk menghindari circular dependency — triggeredPluginHandler import
+ * intentSessionService, jadi intentSessionService tidak boleh import
+ * triggeredPluginHandler di top-level.
  *
- * @returns {Promise<string>}
+ * @returns {Promise<{ systemPrompt: string, tools: object[] }>}
  */
-async function _buildSystemPrompt() {
-  if (_cachedSystemPrompt) return _cachedSystemPrompt;
-
-  // Lazy import untuk hindari circular dependency
-  const { getIntentDefinitions } = await import('../core/triggeredPluginHandler.js');
-  const definitions = getIntentDefinitions();
-
-  if (definitions.length === 0) {
-    logger.warn('⚠️ Tidak ada intentDefinition dari plugin manapun — intent detector tidak akan mengenali aksi apapun');
-    _cachedSystemPrompt = BASE_PROMPT;
-    return _cachedSystemPrompt;
+async function _buildToolsAndPrompt() {
+  if (_cachedSystemPrompt && _cachedTools) {
+    return { systemPrompt: _cachedSystemPrompt, tools: _cachedTools };
   }
 
-  // Format: [1] "intentName" - deskripsi... [2] "intentName2" - deskripsi...
-  const intentList = definitions
-    .map((d, i) => `[${i + 1}] ${d.definition}`)
-    .join(' ');
+  // Lazy import untuk hindari circular dependency
+  const { getIntentToolSchemas } = await import('../core/triggeredPluginHandler.js');
+  const tools = getIntentToolSchemas();
 
-  _cachedSystemPrompt = `${BASE_PROMPT} Daftar intent yang kamu kenali beserta cara mengekstrak params-nya: ${intentList}`;
+  if (tools.length === 0) {
+    logger.warn('⚠️ Tidak ada tool dari plugin manapun — intent detector tidak akan mengenali aksi apapun');
+  } else {
+    logger.info({ intentCount: tools.length }, '✅ Daftar tools intent detector berhasil di-build');
+  }
 
-  logger.info({ intentCount: definitions.length }, '✅ System prompt intent detector berhasil di-build');
-  return _cachedSystemPrompt;
+  _cachedSystemPrompt = BASE_PROMPT;
+  _cachedTools = tools;
+  return { systemPrompt: _cachedSystemPrompt, tools: _cachedTools };
 }
 
-// ─── Reset cache (jika diperlukan reload) ────────────────────────────────
+// ─── Reset cache (jika diperlukan reload) ───────────────────────────────
 export function resetSystemPromptCache() {
   _cachedSystemPrompt = null;
-  logger.debug('System prompt cache di-reset');
+  _cachedTools = null;
+  logger.debug('Tools & system prompt cache intent detector di-reset');
 }
 
-// ─── Init: buat intent session untuk satu sender ─────────────────────────
+// ─── Init: buat intent session untuk satu sender ────────────────────────
 /**
  * Inisialisasi intent session untuk sender tertentu.
- * Build system prompt terlebih dahulu (dari base + definisi plugin),
- * lalu kirim ke Qwen sebagai pesan pertama → simpan session ID.
+ * Build tools + system prompt terlebih dahulu, lalu kirim ke Qwen sebagai
+ * pesan pertama → simpan session ID.
  *
  * @param {string} senderJid
  * @returns {Promise<string|null>} sessionId atau null jika gagal
@@ -93,18 +111,15 @@ export async function initIntentSession(senderJid) {
   try {
     logger.info({ senderJid }, '🔧 Inisialisasi intent session...');
 
-    const systemPrompt = await _buildSystemPrompt();
+    const { systemPrompt, tools } = await _buildToolsAndPrompt();
 
     const res = await client.post('/v1/chat/completions', {
       model: config.ai.taskModel,
       messages: [
-        {
-          role: 'user',
-          // Pesan pertama: kirim system prompt + instruksi awal
-          // Qwen akan merespons JSON {"intent":null,"params":{}} — kita abaikan hasilnya
-          content: `${systemPrompt} Pesan pertama untuk inisialisasi: "halo"`,
-        },
+        { role: 'user', content: `${systemPrompt} Pesan pertama untuk inisialisasi: "halo"` },
       ],
+      tools,
+      tool_choice: 'auto',
       stream: false,
       think_mode: 'fast', // intent detection tidak butuh deep reasoning
     });
@@ -130,7 +145,7 @@ export async function initIntentSession(senderJid) {
   }
 }
 
-// ─── Init default: buat intent session untuk owner saat bot start ─────────
+// ─── Init default: buat intent session untuk owner saat bot start ──────
 /**
  * Dipanggil dari bot.js saat connection.open.
  * Membuat intent session untuk owner secara proaktif.
@@ -144,10 +159,11 @@ export async function initOwnerIntentSession() {
   await initIntentSession(ownerJid);
 }
 
-// ─── Kirim pesan ke intent session & parse hasil ──────────────────────────
+// ─── Kirim pesan ke intent session & parse hasil ────────────────────────
 /**
- * Kirim teks (dan gambar opsional) ke intent session sender dan dapatkan hasil deteksi intent.
- * Jika session belum ada atau expired (404), auto-reinit dulu.
+ * Kirim teks (dan gambar opsional) ke intent session sender dan dapatkan
+ * hasil deteksi intent — sekarang via tool_calls, bukan JSON.parse raw text.
+ * Jika session belum ada atau error, auto-reinit dulu.
  *
  * @param {string} senderJid
  * @param {string} text - Teks pesan dari owner/user (bisa "[gambar dikirim]" jika tanpa caption)
@@ -169,12 +185,16 @@ export async function detectIntentWithSession(senderJid, text, attachments = nul
   return await _sendToIntentSession(senderJid, sessionId, text, false, attachments);
 }
 
-// ─── Internal: kirim ke session dengan auto-reinit jika 404 ──────────────
+// ─── Internal: kirim ke session dengan auto-reinit jika error ──────────
 async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false, attachments = null) {
   try {
+    const { tools } = await _buildToolsAndPrompt();
+
     const body = {
       model: config.ai.taskModel,
       messages: [{ role: 'user', content: text }],
+      tools,
+      tool_choice: 'auto',
       stream: false,
       think_mode: 'fast',
     };
@@ -200,26 +220,23 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
       _store.set(senderJid, newSessionId);
     }
 
-    const raw = res.data?.choices?.[0]?.message?.content?.trim();
-    if (!raw) return { intent: null, params: {} };
+    const message = res.data?.choices?.[0]?.message ?? null;
+    const toolCall = extractToolCall(message);
 
-    logger.debug({ senderJid, raw: raw.slice(0, 120) }, '🔍 Intent session response');
+    if (!toolCall) {
+      logger.debug({ senderJid, preview: message?.content?.slice(0, 80) }, '🔍 Intent session: tidak ada tool dipanggil (tidak ada aksi)');
+      return { intent: null, params: {} };
+    }
 
-    // Strip markdown backtick jika Qwen menambahkan
-    const cleaned = raw.replace(/```json|```/gi, '').trim();
-    const parsed = JSON.parse(cleaned);
+    logger.debug({ senderJid, intent: toolCall.name }, '🔍 Intent session: tool call terdeteksi');
 
-    return {
-      intent: parsed.intent || null,
-      params: parsed.params || {},
-    };
+    return { intent: toolCall.name, params: toolCall.args };
   } catch (err) {
     const status = err.response?.status;
 
     // PAF-Model gateway tidak punya kode error khusus untuk "session expired"
     // (lihat API_USAGE.md §12: hanya 400/422/500/502/504). Jadi untuk error
-    // apapun yang bukan retry, kita coba reinit sekali sebagai fallback —
-    // siapa tahu penyebabnya memang session yang sudah tidak valid di server.
+    // apapun yang bukan retry, kita coba reinit sekali sebagai fallback.
     if (!isRetry) {
       logger.warn({ senderJid, status, err: err.message }, '⚠️ Intent session error, coba reinit sekali...');
       _store.delete(senderJid);
@@ -234,13 +251,13 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
   }
 }
 
-// ─── Hapus intent session untuk sender ───────────────────────────────────
+// ─── Hapus intent session untuk sender ──────────────────────────────────
 export function deleteIntentSession(senderJid) {
   _store.delete(senderJid);
   logger.debug({ senderJid }, 'Intent session dihapus dari store');
 }
 
-// ─── List semua intent session aktif ─────────────────────────────────────
+// ─── List semua intent session aktif ────────────────────────────────────
 export function listIntentSessions() {
   return Array.from(_store.entries()).map(([jid, sessionId]) => ({
     jid,

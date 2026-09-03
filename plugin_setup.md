@@ -218,6 +218,15 @@ handler: async ({ sock, jid, msg, reply }) => {
 
 ## 2️⃣ Triggered Plugin
 
+> 🆕 **Sejak update tool-calling (lihat CHANGELOG [6.0.0]):** deteksi intent
+> TIDAK LAGI meminta Qwen menulis raw JSON `{"intent":..., "params":{...}}`
+> di tengah teks. Setiap triggered plugin sekarang didaftarkan sebagai satu
+> **tool/function** (OpenAI function-calling shape, lihat API_USAGE.md §9)
+> — Qwen memanggil tool yang sesuai lewat `tool_calls`, sudah divalidasi
+> bentuknya oleh gateway sendiri. Field `intent` = nama function, field baru
+> `parameters` (opsional tapi disarankan) = JSON Schema parameter tool
+> tersebut. Lihat bagian "Struktur File" di bawah.
+
 ### Cara Kerja
 
 1. Owner mengirim pesan **tanpa prefix** (teks atau gambar, dengan/tanpa caption) — di DM maupun di grup terdaftar yang punya `input` channel
@@ -225,28 +234,41 @@ handler: async ({ sock, jid, msg, reply }) => {
    - Gambar di-download, dikonversi ke base64, dan dikemas sebagai `attachments`
    - Jika gambar tanpa caption, `intentText` = `"[gambar dikirim]"` agar intent session tetap punya konteks
 3. `messageHandler.js` menjalankan **dua proses paralel**:
-   - Intent detection via `intentSessionService.js` (kirim teks + gambar ke Qwen)
+   - Intent detection via `intentSessionService.js` (kirim teks + gambar + `tools` ke Qwen)
    - AI chat biasa via `aiService.js` (kirim teks + gambar ke Qwen)
-4. Jika Qwen mendeteksi intent (return JSON `{ intent: "...", params: {...} }`):
-   - Triggered plugin yang sesuai dijalankan
+4. Jika Qwen memanggil salah satu tool (`tool_calls` berisi nama function = intent + `arguments` = params):
+   - Triggered plugin yang sesuai (dicocokkan dari nama tool) dijalankan
    - Reply dari plugin di-intercept → dikirim ke **chat session** sebagai konteks sistem (fire & forget) — agar chat session memahami hasil eksekusi plugin, mencegah missed context
    - Hasil AI chat **dibuang** (tidak dikirim ke owner)
-5. Jika tidak ada intent → hasil AI chat dikirim ke owner
+5. Jika tidak ada tool yang dipanggil → hasil AI chat dikirim ke owner
 
 > ⚠️ **Triggered plugin hanya aktif untuk owner.** Non-owner hanya mendapat AI chat biasa (dengan gambar jika ada).
 > Di grup terdaftar, intent detection hanya berjalan jika grup memiliki role `input` atau `both`.
 
 ### Struktur File
 
-Setiap triggered plugin **wajib** export `intent`, `intentDefinition`, dan `handler`. Field `groupContextPrompt` bersifat opsional tapi **sangat direkomendasikan** jika plugin akan digunakan sebagai channel input grup:
+Setiap triggered plugin **wajib** export `intent`, `intentDefinition`, dan `handler`. Field `parameters` bersifat opsional tapi **sangat direkomendasikan** (tanpa itu, AI kurang presisi mengekstrak parameter). Field `groupContextPrompt` juga opsional tapi **sangat direkomendasikan** jika plugin akan digunakan sebagai channel input grup:
 
 ```js
 // plugins/triggered/namaPlugin.js
 export default {
-  intent: 'namaIntent',         // harus cocok dengan intent yang dikembalikan Qwen (case-insensitive)
+  intent: 'namaIntent',         // jadi NAMA FUNCTION/TOOL — harus unik antar plugin, tanpa spasi
 
-  intentDefinition: `"namaIntent" - deskripsi kapan intent ini aktif. Ekstrak: param1 (tipe, keterangan), param2 (tipe, keterangan).`,
-  // ↑ di-inject otomatis ke system prompt intent session Qwen saat bot start
+  intentDefinition: `"namaIntent" - deskripsi kapan intent ini aktif (dipanggil).`,
+  // ↑ jadi `description` tool — di-inject otomatis ke daftar `tools` saat bot start
+
+  // OPTIONAL (tapi sangat disarankan) — JSON Schema parameter tool ini,
+  // format OpenAI function-calling: { type: 'object', properties: {...}, required: [...] }
+  // Jika tidak diisi, fallback ke schema generik (bebas properti apapun,
+  // AI lebih mudah salah isi parameter).
+  parameters: {
+    type: 'object',
+    properties: {
+      param1: { type: 'string', description: 'Keterangan param1' },
+      param2: { type: 'number', description: 'Keterangan param2' },
+    },
+    required: ['param1'],
+  },
 
   groupContextPrompt: `Teks persona yang akan otomatis menjadi persona grup saat plugin ini di-assign sebagai channel input/both.`,
   // ↑ otomatis disimpan ke DB sebagai persona grup saat !group channel <groupJid> namaIntent input/both
@@ -258,12 +280,15 @@ export default {
   ownerOnly: true,
 
   handler: async (ctx) => {
+    // ctx.params sudah berisi hasil parse tool_calls (sesuai schema di atas)
     // logika triggered plugin di sini
   },
 };
 ```
 
-> ⚠️ Plugin tanpa `intentDefinition` tetap bisa di-load dan berjalan, tapi Qwen **tidak akan pernah mengenali intent tersebut** karena tidak masuk ke system prompt. Pastikan selalu mengisi `intentDefinition`.
+> ⚠️ Plugin tanpa `intentDefinition` tetap bisa di-load dan berjalan, tapi Qwen **tidak akan pernah mengenali intent tersebut** karena tool tidak masuk ke daftar `tools`. Pastikan selalu mengisi `intentDefinition`.
+
+> ℹ️ Plugin tanpa `parameters` tetap bisa jalan (fallback ke schema generik `{ type: 'object', properties: {}, additionalProperties: true }`) — tapi AI lebih rawan salah/kurang lengkap mengisi parameter. Selalu definisikan `parameters` untuk plugin baru.
 
 > ℹ️ Plugin tanpa `groupContextPrompt` tetap bisa di-assign ke grup, tapi persona grup **tidak akan berubah** — grup tetap memakai persona yang sudah ada sebelumnya (atau null).
 

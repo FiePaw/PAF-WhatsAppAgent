@@ -41,26 +41,40 @@ const pendingConfirm = new Map();
 export default {
   intent: 'myFinance',
 
-  intentDefinition: `"myFinance" - owner ingin melakukan operasi keuangan pribadi via FinTrack. Ekstrak:
-  action (string, salah satu dari: addTransaction | deleteTransaction | addBudget | deleteBudget | addBill | deleteBill | addInvestment | deleteInvestment | getSummary | confirmDelete),
-  type (string, "income" atau "expense" — hanya untuk addTransaction),
-  amount (number, nominal dalam Rupiah — untuk addTransaction, addBudget, addBill, addInvestment),
-  category (string, kategori transaksi/anggaran/tagihan),
-  date (string, format YYYY-MM-DD, jika tidak disebut kosongkan),
-  description (string, keterangan transaksi — untuk addTransaction),
-  searchKeyword (string, kata kunci nama/deskripsi untuk mencari item yang mau dihapus — untuk deleteTransaction, deleteBudget, deleteBill, deleteInvestment),
-  confirmIndex (number, angka pilihan yang dipilih owner saat konfirmasi hapus — untuk confirmDelete),
-  name (string, nama tagihan — untuk addBill),
-  due_day (number, tanggal jatuh tempo 1-31 — untuk addBill),
-  autodebit (boolean, apakah auto-debit — untuk addBill),
-  notes (string, catatan — untuk addBill, addInvestment),
-  code (string, kode saham IDX huruf kapital — untuk addInvestment),
-  stockName (string, nama perusahaan saham — untuk addInvestment),
-  shares (number, jumlah lembar saham — untuk addInvestment),
-  buy_price (number, harga beli per lembar — untuk addInvestment),
-  buy_date (string, tanggal beli YYYY-MM-DD — untuk addInvestment).
-  Intent getSummary aktif jika owner minta laporan, ringkasan, atau info keuangan.
-  Intent confirmDelete aktif jika owner menyebut angka/nomor sebagai pilihan dari daftar hapus sebelumnya.`,
+  intentDefinition: `"myFinance" - owner ingin melakukan operasi keuangan pribadi via FinTrack (catat transaksi, anggaran, tagihan, investasi, atau minta laporan/ringkasan). Intent getSummary aktif jika owner minta laporan/ringkasan/info keuangan. Intent confirmDelete aktif jika owner menyebut angka/nomor sebagai pilihan dari daftar hapus sebelumnya (lihat riwayat percakapan).`,
+
+  // ─── Parameters (JSON Schema, format function-calling §9 API_USAGE.md) ─
+  // Catatan: hanya `action` yang wajib di level schema — field lain OPSIONAL
+  // di sini karena kebutuhannya berbeda per action (mis. addBill butuh
+  // due_day, addInvestment butuh shares/buy_price). Validasi field wajib
+  // per-action tetap dilakukan di handler() seperti sebelumnya.
+  parameters: {
+    type: 'object',
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['addTransaction', 'deleteTransaction', 'addBudget', 'deleteBudget', 'addBill', 'deleteBill', 'addInvestment', 'deleteInvestment', 'getSummary', 'confirmDelete'],
+        description: 'Jenis operasi keuangan yang diminta owner',
+      },
+      type: { type: 'string', enum: ['income', 'expense'], description: 'Hanya untuk addTransaction' },
+      amount: { type: 'number', description: 'Nominal dalam Rupiah — untuk addTransaction, addBudget, addBill, addInvestment (harga beli per lembar)' },
+      category: { type: 'string', description: 'Kategori transaksi/anggaran/tagihan' },
+      date: { type: 'string', description: 'Format YYYY-MM-DD, kosongkan jika tidak disebut' },
+      description: { type: 'string', description: 'Keterangan transaksi — untuk addTransaction' },
+      searchKeyword: { type: 'string', description: 'Kata kunci nama/deskripsi untuk mencari item yang mau dihapus — untuk deleteTransaction, deleteBudget, deleteBill, deleteInvestment' },
+      confirmIndex: { type: 'integer', description: 'Angka pilihan yang dipilih owner saat konfirmasi hapus — untuk confirmDelete' },
+      name: { type: 'string', description: 'Nama tagihan — untuk addBill' },
+      due_day: { type: 'integer', minimum: 1, maximum: 31, description: 'Tanggal jatuh tempo 1-31 — untuk addBill' },
+      autodebit: { type: 'boolean', description: 'Apakah auto-debit — untuk addBill' },
+      notes: { type: 'string', description: 'Catatan — untuk addBill, addInvestment' },
+      code: { type: 'string', description: 'Kode saham IDX huruf kapital — untuk addInvestment' },
+      stockName: { type: 'string', description: 'Nama perusahaan saham — untuk addInvestment' },
+      shares: { type: 'number', description: 'Jumlah lembar saham — untuk addInvestment' },
+      buy_price: { type: 'number', description: 'Harga beli per lembar — untuk addInvestment' },
+      buy_date: { type: 'string', description: 'Tanggal beli YYYY-MM-DD — untuk addInvestment' },
+    },
+    required: ['action'],
+  },
 
   groupContextPrompt: `Kamu adalah asisten keuangan pribadi owner. Kamu memahami semua data keuangan owner: transaksi pemasukan dan pengeluaran, anggaran per kategori, tagihan rutin bulanan, dan portofolio investasi saham IDX. Bantu owner mencatat, mengelola, dan memahami kondisi keuangannya. Jawab ringkas dan pakai Bahasa Indonesia. Saat owner menyebut nominal uang, asumsikan dalam Rupiah.`,
 

@@ -12,6 +12,36 @@ import { getHistory } from '../services/chatHistoryService.js';
 import logger from '../utils/logger.js';
 
 /**
+ * Fix #2 — Segmented Typing Reply lebih paham kapan harus pecah pesan.
+ * Hitung sinyal konteks NUMERIK dari chatHistory sebelum memanggil
+ * askAISegmented, supaya AI punya bukti nyata (bukan hanya menerka dari
+ * nada teks) saat memutuskan jumlah segmen. Lihat buildContextHintsBlock()
+ * di services/aiService.js untuk bagaimana ini dirender ke prompt.
+ *
+ * @param {string} jid       - jid yang dipakai untuk lookup chatHistory
+ * @param {string} userText  - teks pesan user saat ini
+ * @returns {{ userMessageLength: number, secondsSinceLastMessage: number|undefined, messagesLastFiveMin: number }}
+ */
+function computeContextHints(jid, userText) {
+  const history = getHistory(jid) || [];
+  const now = Date.now();
+
+  const lastEntry = history[history.length - 1];
+  const secondsSinceLastMessage = lastEntry
+    ? Math.max(0, Math.floor((now - new Date(lastEntry.timestamp).getTime()) / 1000))
+    : undefined;
+
+  const fiveMinAgo = now - 5 * 60 * 1000;
+  const messagesLastFiveMin = history.filter((m) => new Date(m.timestamp).getTime() >= fiveMinAgo).length;
+
+  return {
+    userMessageLength: userText?.length ?? 0,
+    secondsSinceLastMessage,
+    messagesLastFiveMin,
+  };
+}
+
+/**
  * Jika pesan mengandung gambar, minta Qwen mendeskripsikan gambar tersebut
  * lalu simpan hasilnya ke chatHistory sebagai pesan user dengan prefix [Gambar].
  * Berjalan fire-and-forget — tidak memblokir proses chat utama.
@@ -211,7 +241,8 @@ export async function handleMessage(sock, msg, plugins) {
         })
       : Promise.resolve(false);
 
-    const groupAiPromise = askAISegmented({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments }).catch((err) => {
+    const groupContextHints = computeContextHints(jid, intentText);
+    const groupAiPromise = askAISegmented({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, contextHints: groupContextHints }).catch((err) => {
       logger.error({ sender, jid, err: err.message }, 'Error saat request ke AI (group)');
       return null;
     });
@@ -303,7 +334,8 @@ export async function handleMessage(sock, msg, plugins) {
       return false;
     });
 
-    const aiPromise = askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments }).catch((err) => {
+    const ownerContextHints = computeContextHints(sender, intentText);
+    const aiPromise = askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, contextHints: ownerContextHints }).catch((err) => {
       logger.error({ sender, err: err.message }, 'Error saat request ke AI (parallel)');
       return null;
     });
@@ -364,7 +396,8 @@ export async function handleMessage(sock, msg, plugins) {
   }
 
   try {
-    const segments = await askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments });
+    const contextHints = computeContextHints(sender, intentText);
+    const segments = await askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, contextHints });
     const fullText = segments.map((s) => s.text).join(' ');
     await replySegmented(sock, jid, segments, msg);
     recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});

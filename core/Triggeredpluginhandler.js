@@ -3,16 +3,25 @@
 //
 // Alur:
 //   1. Kirim teks ke intent session sender (session persisten di Qwen, bukan one-shot)
-//   2. Qwen punya konteks percakapan → return JSON { intent, params }
-//   3. intent dikenal → jalankan triggered plugin handler
+//   2. Qwen punya akses ke `tools` (function-calling, §9 API_USAGE.md) — satu
+//      tool per triggered plugin → Qwen MEMANGGIL tool yang sesuai jika ada
+//      aksi nyata (tidak lagi menulis raw JSON bebas yang rawan gagal parse)
+//   3. intent (= nama tool yang dipanggil) dikenal → jalankan triggered plugin handler
 //   4. Reply dari plugin di-intercept → dikirim ke chat session sebagai konteks sistem
 //      agar chat session punya pemahaman yang sama dengan hasil eksekusi plugin
 //      → tidak ada missed context antara intent session dan chat session
-//   5. intent null → return false (fallback ke AI chat biasa)
+//   5. tidak ada tool dipanggil → return false (fallback ke AI chat biasa)
 //
 // Setiap triggered plugin wajib export:
-//   intent: string             — nama intent yang ditangani
-//   intentDefinition: string   — deskripsi intent untuk system prompt Qwen
+//   intent: string             — nama intent yang ditangani (jadi nama function/tool)
+//   intentDefinition: string   — deskripsi intent (jadi description function/tool)
+//   parameters: object         — (opsional, SANGAT disarankan) JSON Schema untuk
+//                                 parameter tool ini, format OpenAI function-calling:
+//                                 { type: 'object', properties: {...}, required: [...] }
+//                                 Jika tidak diisi, fallback ke schema generik
+//                                 (bebas properti apapun) — kurang presisi, AI lebih
+//                                 mudah salah isi parameter. Lihat plugins/triggered/*.js
+//                                 untuk contoh.
 //   groupContextPrompt: string — persona grup otomatis saat plugin di-assign sebagai input/both
 //   handler: async (ctx) => void
 
@@ -21,6 +30,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { detectIntentWithSession } from '../services/intentSessionService.js';
 import { askAI } from '../services/aiService.js';
+import { buildFunctionTool } from '../utils/toolCalling.js';
 import logger from '../utils/logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -93,6 +103,41 @@ export function getIntentDefinitions() {
     }
   }
   return result;
+}
+
+// Schema fallback generik — dipakai jika plugin belum mendefinisikan
+// `parameters` sendiri. Menerima properti apapun (kurang presisi, tapi
+// tetap backward-compat dengan plugin lama yang hanya punya intentDefinition
+// dalam bentuk prosa).
+const GENERIC_PARAMS_SCHEMA = {
+  type: 'object',
+  properties: {},
+  additionalProperties: true,
+};
+
+// ─── Expose daftar tools (function-calling) untuk intentSessionService ──
+/**
+ * Bangun daftar `tools` (OpenAI function-calling shape, §9 API_USAGE.md)
+ * dari semua triggered plugin yang sudah di-load — satu tool per plugin,
+ * nama function = intent, description = intentDefinition, parameters =
+ * plugin.parameters (atau schema generik jika plugin belum mendefinisikannya).
+ *
+ * Dipanggil oleh intentSessionService saat build request ke Qwen.
+ *
+ * @returns {object[]} array tool, lihat utils/toolCalling.js buildFunctionTool()
+ */
+export function getIntentToolSchemas() {
+  const tools = [];
+  for (const [intent, plugin] of triggeredPlugins.entries()) {
+    tools.push(
+      buildFunctionTool(
+        intent,
+        plugin.intentDefinition || `Intent "${intent}" — tidak ada deskripsi.`,
+        plugin.parameters || GENERIC_PARAMS_SCHEMA
+      )
+    );
+  }
+  return tools;
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────

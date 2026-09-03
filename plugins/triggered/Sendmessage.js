@@ -14,7 +14,23 @@ export default {
   // ─── Intent definition untuk system prompt Qwen ──────────────────────────
   // String ini akan di-inject ke system prompt intent session secara otomatis.
   // Tulis sejelas mungkin: nama intent, kapan valid, dan params apa yang diekstrak.
-  intentDefinition: `"sendMessage" - owner ingin mengirim pesan ke nomor WhatsApp lain. Ekstrak: targetNumber (string, angka saja tanpa + atau spasi, format internasional 628xxx) dan message (string, isi pesan yang ingin disampaikan, tulis ulang secara natural orang pertama sesuai maksud owner). Intent ini valid hanya jika nomor target eksplisit disebutkan.`,
+  intentDefinition: `"sendMessage" - owner ingin mengirim pesan ke nomor WhatsApp lain. Panggil tool ini HANYA jika nomor target eksplisit disebutkan oleh owner.`,
+
+  // ─── Parameters (JSON Schema, format function-calling §9 API_USAGE.md) ─
+  parameters: {
+    type: 'object',
+    properties: {
+      targetNumber: {
+        type: 'string',
+        description: 'Nomor tujuan, angka saja tanpa + atau spasi, format internasional (contoh: 628111111111)',
+      },
+      message: {
+        type: 'string',
+        description: 'Isi pesan yang ingin disampaikan — tulis ulang secara natural orang pertama sesuai maksud owner, jangan disingkat.',
+      },
+    },
+    required: ['targetNumber', 'message'],
+  },
 
   // ─── Context prompt untuk grup ───────────────────────────────────────────
   // Otomatis jadi persona grup saat plugin ini di-assign sebagai channel input/both.

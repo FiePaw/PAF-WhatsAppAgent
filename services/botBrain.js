@@ -23,9 +23,10 @@
 import cronService from './cronService.js';
 import { getActiveJids, getAllKnownJids, getHistory, pruneAllOldMessages } from './chatHistoryService.js';
 import { getPresence, subscribePresence, subscribeAll } from './presenceService.js';
-import { askAI, askAISegmented } from './aiService.js';
+import { askAI, askAISegmented, askAITool } from './aiService.js';
 import { getPersona } from './personaService.js';
 import { replySegmented } from '../utils/delay.js';
+import { buildFunctionTool } from '../utils/toolCalling.js';
 import db from './db.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
@@ -164,33 +165,46 @@ async function updateUserProfile(jid, history) {
 === PERCAKAPAN ===
 ${conversation}
 
-Ekstrak informasi berikut. Gunakan null atau [] jika tidak tersedia. Gabungkan dengan profil lama jika ada.
+Gunakan tool yang tersedia untuk melaporkan hasil. Kosongkan field (string kosong/array kosong) jika informasi tidak tersedia. Gabungkan dengan profil lama jika ada.`;
 
-Balas HANYA dengan JSON valid (tanpa komentar, tanpa markdown backtick):
-{
-  "nickname":    "nama panggilan user atau null",
-  "personality": "deskripsi kepribadian singkat",
-  "hobbies":     ["hobi/minat"],
-  "topics":      ["topik favorit"],
-  "sensitive":   ["hal sensitif yang dihindari"],
-  "mood":        "mood dominan (senang/sedih/excited/stress/santai/dll)",
-  "language":    "gaya bahasa (formal/casual/gaul/campuran)",
-  "goals":       ["tujuan/niat/rencana yang disebutkan"],
-  "summary":     "ringkasan 2-3 kalimat tentang siapa user ini"
-}`;
+  // Task analisis/ekstraksi via tool-calling (§9 API_USAGE.md) — menggantikan
+  // pola lama "minta AI balas raw JSON lalu JSON.parse manual" yang rawan
+  // gagal parse.
+  const profileTool = buildFunctionTool(
+    'report_user_profile',
+    'Laporkan hasil ekstraksi profil karakter user dari percakapan WhatsApp.',
+    {
+      type: 'object',
+      properties: {
+        nickname:    { type: 'string', description: 'Nama panggilan user, string kosong jika tidak ada' },
+        personality: { type: 'string', description: 'Deskripsi kepribadian singkat' },
+        hobbies:     { type: 'array', items: { type: 'string' }, description: 'Hobi/minat' },
+        topics:      { type: 'array', items: { type: 'string' }, description: 'Topik favorit' },
+        sensitive:   { type: 'array', items: { type: 'string' }, description: 'Hal sensitif yang dihindari' },
+        mood:        { type: 'string', description: 'Mood dominan (senang/sedih/excited/stress/santai/dll)' },
+        language:    { type: 'string', description: 'Gaya bahasa (formal/casual/gaul/campuran)' },
+        goals:       { type: 'array', items: { type: 'string' }, description: 'Tujuan/niat/rencana yang disebutkan' },
+        summary:     { type: 'string', description: 'Ringkasan 2-3 kalimat tentang siapa user ini' },
+      },
+      required: ['personality', 'mood', 'language', 'summary'],
+    }
+  );
 
   try {
-    // Task analisis/ekstraksi JSON di background → Qwen (config.ai.taskModel)
-    const raw = await askAI({
+    const result = await askAITool({
       jid: `profile_builder_${jid}`,
       userText: prompt,
-      systemPrompt: 'Kamu adalah sistem ekstraksi profil. Balas HANYA dengan JSON valid. Tidak ada teks lain.',
-      forceNew: true,
+      systemPrompt: 'Kamu adalah sistem ekstraksi profil. Gunakan tool yang tersedia untuk melaporkan hasil.',
+      tools: [profileTool],
       model: config.ai.taskModel,
     });
 
-    const profile = JSON.parse(raw.replace(/```json|```/gi, '').trim());
-    await db.upsert(PROFILE_COL, { jid }, { ...profile, jid, updatedAt: new Date().toISOString() });
+    if (result.name !== 'report_user_profile') {
+      logger.warn({ jid }, '⚠️ botBrain: AI tidak melaporkan profil via tool, skip');
+      return;
+    }
+
+    await db.upsert(PROFILE_COL, { jid }, { ...result.args, jid, updatedAt: new Date().toISOString() });
     logger.info({ jid }, '👤 botBrain: profil user diperbarui');
   } catch (err) {
     logger.warn({ jid, err: err.message }, '⚠️ botBrain: gagal perbarui profil');
@@ -249,33 +263,51 @@ async function extractFollowUps(jid, history) {
 
   const prompt = `Kamu adalah sistem deteksi event dari percakapan WhatsApp. Temukan event/rencana/niat user yang memiliki dimensi waktu.
 
-Waktu sekarang: ${nowLocale}
+Waktu sekarang: ${nowLocale} (ISO: ${now})
 
 === PESAN USER ===
 ${userMessages}
 
-Jika tidak ada event, kembalikan array kosong.
-followUpAt dalam ISO 8601. Waktu sekarang: ${now}
+Gunakan tool yang tersedia untuk melaporkan event yang ditemukan (followUpAt dalam format ISO 8601). Jika tidak ada event, panggil tool dengan array events kosong.`;
 
-Balas HANYA dengan JSON valid:
-{ "events": [{ "event": "deskripsi", "context": "kutipan", "followUpAt": "ISO" }] }`;
+  const followUpTool = buildFunctionTool(
+    'report_followup_events',
+    'Laporkan event/rencana/niat user yang punya dimensi waktu dan perlu di-follow-up nanti.',
+    {
+      type: 'object',
+      properties: {
+        events: {
+          type: 'array',
+          description: 'Daftar event ditemukan, array kosong jika tidak ada',
+          items: {
+            type: 'object',
+            properties: {
+              event: { type: 'string', description: 'Deskripsi singkat event' },
+              context: { type: 'string', description: 'Kutipan konteks dari percakapan' },
+              followUpAt: { type: 'string', description: 'Waktu follow-up, format ISO 8601' },
+            },
+            required: ['event', 'followUpAt'],
+          },
+        },
+      },
+      required: ['events'],
+    }
+  );
 
   try {
-    // Task analisis/ekstraksi JSON di background → Qwen (config.ai.taskModel)
-    const raw = await askAI({
+    const result = await askAITool({
       jid: `followup_extractor_${jid}`,
       userText: prompt,
-      systemPrompt: 'Kamu adalah sistem deteksi event. Balas HANYA dengan JSON valid. Tidak ada teks lain.',
-      forceNew: true,
+      systemPrompt: 'Kamu adalah sistem deteksi event. Gunakan tool yang tersedia untuk melaporkan hasil.',
+      tools: [followUpTool],
       model: config.ai.taskModel,
     });
 
-    const result = JSON.parse(raw.replace(/```json|```/gi, '').trim());
-    if (!result.events?.length) return;
+    if (result.name !== 'report_followup_events' || !result.args.events?.length) return;
 
     const existing = db.find(FOLLOWUP_COL, { jid }).map((e) => e.event);
     let saved = 0;
-    for (const ev of result.events) {
+    for (const ev of result.args.events) {
       if (existing.includes(ev.event)) continue;
       await db.insert(FOLLOWUP_COL, {
         jid, event: ev.event, context: ev.context ?? '',
@@ -473,24 +505,46 @@ async function thinkAndActForJid(jid) {
 
   const prompt = buildBrainPrompt({ jid, history, presence, profileText, followUpsText, timeText, readStatus });
 
+  const decisionTool = buildFunctionTool(
+    'make_decision',
+    'Laporkan keputusan holistik tentang kontak WhatsApp ini: pesan yang perlu dikirim, follow-up yang terselesaikan, update profil, dan kapan analisa berikutnya.',
+    {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'Pesan yang dikirim ke user (string kosong jika tidak ada yang perlu dikirim)' },
+        resolvedFollowUps: { type: 'array', items: { type: 'string' }, description: '_id event follow-up yang sudah terselesaikan lewat pesan ini, array kosong jika tidak ada' },
+        profileUpdates: { type: 'object', description: 'Field profil yang perlu diupdate (mis. mood, goals), objek kosong {} jika tidak ada', additionalProperties: true },
+        nextAnalyzeIn: { type: 'string', description: 'Kapan analisa berikutnya, salah satu dari: 10m, 15m, 20m, 30m, 45m, 1h' },
+        reason: { type: 'string', description: 'Alasan singkat keputusan ini' },
+        contextSummary: { type: 'string', description: 'Ringkasan 1-2 kalimat konteks percakapan saat ini' },
+      },
+      required: ['message', 'nextAnalyzeIn', 'reason', 'contextSummary'],
+    }
+  );
+
   let decision;
   try {
-    // Keputusan holistik (JSON) di background → Qwen (config.ai.taskModel)
-    const raw = await askAI({
+    // Keputusan holistik di background → Qwen (config.ai.taskModel), via
+    // tool-calling (§9 API_USAGE.md) — menggantikan pola lama raw-JSON.
+    const result = await askAITool({
       jid: `brain_${jid}`,
       userText: prompt,
-      systemPrompt: 'Kamu adalah sistem keputusan percakapan WhatsApp. Buat keputusan holistik terbaik. Balas HANYA dengan JSON valid sesuai format.',
+      systemPrompt: 'Kamu adalah sistem keputusan percakapan WhatsApp. Buat keputusan holistik terbaik lalu gunakan tool yang tersedia untuk melaporkannya.',
+      tools: [decisionTool],
       model: config.ai.taskModel,
     });
 
-    decision = JSON.parse(raw.replace(/```json|```/gi, '').trim());
+    if (result.name !== 'make_decision') {
+      throw new Error('AI tidak memanggil tool make_decision');
+    }
+    decision = result.args;
 
     logger.info(
       { jid, nextAnalyzeIn: decision.nextAnalyzeIn, reason: decision.reason, hasMsg: !!decision.message?.trim() },
       '🧠 botBrain: keputusan selesai'
     );
   } catch (err) {
-    logger.error({ jid, err: err.message }, '❌ botBrain: gagal parse keputusan Qwen');
+    logger.error({ jid, err: err.message }, '❌ botBrain: gagal ambil keputusan Qwen');
     await saveState(jid, { nextAnalyzeAt: resolveNextAnalyzeAt('30m') });
     return;
   }

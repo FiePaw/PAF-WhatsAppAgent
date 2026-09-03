@@ -46,7 +46,14 @@ const config = {
   },
 
   // ─── Session ─────────────────────────────────────────────────────────────
-  sessionTtl: parseInt(process.env.SESSION_TTL) || 3600000,
+  // Sejak migrasi ke PAF-Model gateway terbaru: sesi AI di SERVER tidak lagi
+  // punya TTL otomatis (lihat API_USAGE.md §6.2.1) — sesi hidup selamanya di
+  // server sampai di-DELETE eksplisit. TTL di bawah ini murni kebijakan sisi
+  // BOT: rolling 24 jam sejak pesan terakhir per JID. Saat TTL tercapai,
+  // sessionStore._cleanup() akan meringkas percakapan ke memoryService
+  // SEBELUM menghapus sesi (lokal + server via DELETE /v1/sessions/{id}) —
+  // lihat services/sessionStore.js dan services/memoryService.js.
+  sessionTtl: parseInt(process.env.SESSION_TTL) || 86400000, // 24 jam (rolling per-JID)
 
   // ─── Auth Baileys ─────────────────────────────────────────────────────────
   authDir: './auth/session',

@@ -191,21 +191,68 @@ class SessionStore {
   /**
    * Bersihkan session expired dari memory dan DB.
    * Berjalan otomatis setiap 10 menit via setInterval.
+   *
+   * Sejak sesi di server TIDAK punya TTL otomatis lagi (API_USAGE.md
+   * §6.2.1), TTL di sini murni kebijakan bot (rolling 24 jam per-JID,
+   * lihat config.sessionTtl). Sebelum benar-benar membuang sesi expired,
+   * kita:
+   *   1. Ringkas chatHistory jid tsb ke memory bank (memoryService) —
+   *      supaya sesi baru berikutnya tidak "amnesia" total.
+   *   2. Hapus sesi di SERVER via DELETE /v1/sessions/{id} (aiService) —
+   *      kebersihan sisi server, mencegah sesi menumpuk selamanya.
+   *   3. Baru hapus mapping lokal (memory + DB) seperti sebelumnya.
+   *
+   * Kedua langkah 1 & 2 dilakukan lazy-import untuk menghindari circular
+   * dependency (aiService.js mengimpor sessionStore.js untuk get/set).
    */
   async _cleanup() {
     const now = Date.now();
     let removed = 0;
 
+    const expired = [];
     for (const [jid, entry] of this._store.entries()) {
       if (now - entry.lastUsed > this._ttl) {
-        this._store.delete(jid);
-        await db.delete(COLLECTION, { jid }).catch(() => {});
-        removed++;
+        expired.push({ jid, sessionId: entry.sessionId });
       }
     }
 
+    if (expired.length === 0) return;
+
+    // Lazy import — hindari circular dependency dengan aiService/memoryService
+    let deleteRemoteSession = null;
+    let isRealContactJid = null;
+    let summarizeAndRemember = null;
+    try {
+      const aiService = await import('./aiService.js');
+      const memoryService = await import('./memoryService.js');
+      deleteRemoteSession = aiService.deleteRemoteSession;
+      isRealContactJid = memoryService.isRealContactJid;
+      summarizeAndRemember = memoryService.summarizeAndRemember;
+    } catch (err) {
+      logger.warn({ err: err.message }, '⚠️ sessionStore: gagal lazy-import aiService/memoryService saat cleanup');
+    }
+
+    for (const { jid, sessionId } of expired) {
+      // 1. Ringkas ke memory bank SEBELUM sesi dihapus (hanya untuk jid nyata)
+      if (summarizeAndRemember && isRealContactJid?.(jid)) {
+        await summarizeAndRemember(jid, 'ttl_expired').catch((err) =>
+          logger.warn({ jid, err: err.message }, '⚠️ sessionStore: gagal summarize sebelum cleanup')
+        );
+      }
+
+      // 2. Hapus sesi di server (best-effort, tidak menghentikan cleanup jika gagal)
+      if (deleteRemoteSession) {
+        await deleteRemoteSession(sessionId).catch(() => {});
+      }
+
+      // 3. Hapus mapping lokal
+      this._store.delete(jid);
+      await db.delete(COLLECTION, { jid }).catch(() => {});
+      removed++;
+    }
+
     if (removed > 0) {
-      logger.debug({ removed }, '🧹 sessionStore: cleanup session expired');
+      logger.debug({ removed }, '🧹 sessionStore: cleanup session expired (24 jam rolling, sudah diringkas ke memory bank)');
     }
   }
 }
