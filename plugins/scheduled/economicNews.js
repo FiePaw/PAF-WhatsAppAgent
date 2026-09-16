@@ -22,7 +22,7 @@ import config from '../../config/config.js';
 import logger from '../../utils/logger.js';
 
 // ─── Instruksi konten untuk AI (bukan lagi instruksi FORMAT JSON manual) ─
-const NEWS_INSTRUCTIONS = `Kamu adalah analis ekonomi profesional. Tugasmu adalah memberikan ringkasan berita ekonomi terkini, lalu melaporkannya lewat tool yang tersedia.
+const NEWS_INSTRUCTIONS = `Kamu adalah analis ekonomi profesional. Tugasmu adalah memberikan ringkasan berita ekonomi terkini, lalu melaporkannya lewat fungsi yang tersedia.
 
 Instruksi GLOBAL (5 berita):
 - Pilih berita ekonomi paling penting dari seluruh dunia
@@ -49,7 +49,7 @@ Aturan WAJIB:
 - Jangan ulangi berita dari update sebelumnya
 - JANGAN MENGGUNAKAN MARKDOWN apapun di dalam summary, cukup plain text.
 
-Gunakan bahasa Indonesia yang singkat, jelas, dan mudah dipahami. Setelah selesai menganalisa, panggil tool "report_economic_update" dengan hasilnya.`;
+Gunakan bahasa Indonesia yang singkat, jelas, dan mudah dipahami. Setelah selesai menganalisa, panggil fungsi "report_economic_update" dengan hasilnya.`;
 
 // ─── Tool schema ─────────────────────────────────────────────────────────
 const newsItemSchema = {
@@ -78,7 +78,10 @@ const calendarItemSchema = {
 
 const economicNewsTool = buildFunctionTool(
   'report_economic_update',
-  'Laporkan hasil analisa ringkasan berita ekonomi global, kalender ekonomi, dan berita Indonesia.',
+  'Laporkan hasil analisa ringkasan berita ekonomi global, kalender ekonomi, dan berita Indonesia. ' +
+  'Aturan wajib: field "summary" HARUS plain text tanpa markdown/link apapun; taruh URL sumber HANYA ' +
+  'di field "sourceUrl" yang terpisah; jangan ulangi berita yang sudah pernah dilaporkan sebelumnya; ' +
+  'tandai "hot":true HANYA untuk berita yang benar-benar luar biasa/jarang terjadi.',
   {
     type: 'object',
     properties: {
@@ -176,11 +179,11 @@ async function sendEconomicNews() {
   // Retry sekali jika AI tidak memanggil tool (jarang terjadi dengan
   // tool-calling, tapi tetap dijaga sebagai fallback)
   if (result.name !== 'report_economic_update') {
-    logger.warn({ preview: result.raw?.slice(0, 100) }, '⚠️ AI tidak memanggil tool report_economic_update, retry sekali...');
+    logger.warn({ preview: result.raw?.slice(0, 100) }, '⚠️ AI tidak memanggil fungsi report_economic_update, retry sekali...');
     try {
       result = await askAITool({
         jid: 'scheduled:economicNews',
-        userText: 'PERINTAH ULANG: kamu WAJIB memanggil tool "report_economic_update" dengan hasil analisa berita ekonomi terkini. Jangan hanya menulis teks biasa.',
+        userText: 'PERINTAH ULANG: kamu WAJIB memanggil fungsi "report_economic_update" dengan hasil analisa berita ekonomi terkini. Jangan hanya menulis teks biasa.',
         systemPrompt: NEWS_INSTRUCTIONS,
         tools: [economicNewsTool],
         thinkMode: 'thinking',
@@ -191,7 +194,7 @@ async function sendEconomicNews() {
       return;
     }
     if (result.name !== 'report_economic_update') {
-      logger.error('❌ AI tetap tidak memanggil tool setelah retry, skip');
+      logger.error('❌ AI tetap tidak memanggil fungsi setelah retry, skip');
       return;
     }
   }

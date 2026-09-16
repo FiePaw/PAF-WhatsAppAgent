@@ -14,7 +14,7 @@ export default {
   // ─── Intent definition untuk system prompt Qwen ──────────────────────────
   // String ini akan di-inject ke system prompt intent session secara otomatis.
   // Tulis sejelas mungkin: nama intent, kapan valid, dan params apa yang diekstrak.
-  intentDefinition: `"sendMessage" - owner ingin mengirim pesan ke nomor WhatsApp lain. Panggil tool ini HANYA jika nomor target eksplisit disebutkan oleh owner.`,
+  intentDefinition: `"sendMessage" - owner ingin mengirim pesan ke nomor WhatsApp lain. Panggil fungsi ini HANYA jika nomor target eksplisit disebutkan oleh owner.`,
 
   // ─── Parameters (JSON Schema, format function-calling §9 API_USAGE.md) ─
   parameters: {

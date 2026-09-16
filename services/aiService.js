@@ -174,9 +174,17 @@ async function sendRequest({
     logger.info({ jid, taskType }, '🎯 Request dengan task_type khusus');
   }
 
-  // think_mode — opsional, arti beda per backend (lihat §7 API_USAGE.md)
-  if (thinkMode) {
-    body.think_mode = thinkMode;
+  // think_mode — opsional, arti beda per backend (lihat §7 API_USAGE.md).
+  // ⚠️ Keputusan produk: SELURUH request ke backend Qwen dipaksa 'thinking'
+  // (deep reasoning), terlepas dari nilai thinkMode yang diminta caller —
+  // dipusatkan di sini agar berlaku otomatis ke SEMUA titik panggilan Qwen
+  // (askAI/askAISegmented/askAITool/generateImage/generateVideo/webSearch/
+  // describeImage/intentSessionService/botBrain/memoryService/economicNews)
+  // tanpa perlu mengubah setiap call site satu-satu. DeepSeek tidak terdampak
+  // — tetap memakai thinkMode apa adanya (default 'auto' dari pemanggil).
+  const resolvedThinkMode = backend === 'qwen' ? 'thinking' : thinkMode;
+  if (resolvedThinkMode) {
+    body.think_mode = resolvedThinkMode;
   }
 
   // attachments — opsional, array of { filename, data (base64), mime_type? }
@@ -366,6 +374,7 @@ export async function generateImage({ jid, prompt, accountModel }) {
         task_type: 'create_image',
         messages: [{ role: 'user', content: prompt }],
         stream: false,
+        think_mode: 'thinking', // task_type create_image selalu backend Qwen — dipaksa thinking
       },
       { timeout: TASK_TIMEOUTS.create_image }
     );
@@ -406,6 +415,7 @@ export async function generateVideo({ jid, prompt, accountModel }) {
         task_type: 'create_video',
         messages: [{ role: 'user', content: prompt }],
         stream: false,
+        think_mode: 'thinking', // task_type create_video selalu backend Qwen — dipaksa thinking
       },
       { timeout: TASK_TIMEOUTS.create_video }
     );
@@ -445,6 +455,7 @@ export async function webSearch({ jid, query, accountModel }) {
         task_type: 'web_search',
         messages: [{ role: 'user', content: query }],
         stream: false,
+        think_mode: 'thinking', // task_type web_search selalu backend Qwen — dipaksa thinking
       },
       { timeout: TASK_TIMEOUTS.web_search }
     );

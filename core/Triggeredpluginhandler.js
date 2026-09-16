@@ -129,10 +129,25 @@ const GENERIC_PARAMS_SCHEMA = {
 export function getIntentToolSchemas() {
   const tools = [];
   for (const [intent, plugin] of triggeredPlugins.entries()) {
+    const baseDefinition = plugin.intentDefinition || `Intent "${intent}" — tidak ada deskripsi.`;
+    // ⚠️ Opsi 2 (lihat diskusi update AiService): untuk backend Qwen, HANYA teks
+    // di dalam `tools[].function.description` yang dijamin masuk ke blok
+    // [SYSTEM CONTEXT] berprioritas tinggi milik gateway (lihat _build_wrapped_prompt
+    // di scrapers/qwen_scraper.py, repo FiePaw/PAF-Model) — systemPrompt bebas (BASE_PROMPT)
+    // hanya nebeng di [USER REQUEST] dan cuma dikirim sekali saat initIntentSession().
+    // Supaya aturan "panggil HANYA jika yakin" tidak hilang seiring sesi berjalan lama,
+    // aturan itu diduplikasi di sini — diulang di SETIAP function description, dan
+    // description ini di-resend di SETIAP pesan (lihat _sendToIntentSession()), bukan
+    // hanya sekali di awal seperti BASE_PROMPT.
+    const reinforcedDefinition =
+      `${baseDefinition} (Panggil fungsi ini HANYA jika kriteria di atas terpenuhi dan ` +
+      `informasi pada pesan owner sudah cukup untuk mengisi parameter wajib — jika ragu ` +
+      `atau informasi kurang, JANGAN memanggil fungsi ini.)`;
+
     tools.push(
       buildFunctionTool(
         intent,
-        plugin.intentDefinition || `Intent "${intent}" — tidak ada deskripsi.`,
+        reinforcedDefinition,
         plugin.parameters || GENERIC_PARAMS_SCHEMA
       )
     );

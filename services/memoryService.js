@@ -186,7 +186,7 @@ export async function consolidateMemories(jid) {
     const result = await askAITool({
       jid: `memory_consolidate_${jid}`,
       userText: `Berikut daftar fakta tentang seorang kontak WhatsApp yang sudah terkumpul terlalu banyak (${facts.length} fakta). Padatkan menjadi maksimal ${MAX_MEMORIES_BEFORE_CONSOLIDATE - 10} fakta paling penting — gabungkan yang mirip/tumpang tindih, buang yang basi atau tidak relevan lagi, pertahankan yang unik dan penting.\n\n${factList}`,
-      systemPrompt: 'Kamu adalah sistem pemadatan memori. Gunakan tool yang tersedia untuk melaporkan hasil akhir.',
+      systemPrompt: 'Kamu adalah sistem pemadatan memori. Gunakan fungsi yang tersedia untuk melaporkan hasil akhir.',
       tools: [tool],
       forceNew: true,
       useMemory: false,
@@ -384,7 +384,7 @@ export async function summarizeAndRemember(jid, reason = 'ttl_expired') {
     const result = await askAITool({
       jid: `memory_summarize_${jid}_${Date.now()}`,
       userText: `Percakapan WhatsApp berikut baru saja berakhir (sesi ditutup). Ekstrak ringkasan dan fakta penting baru dari percakapan ini:\n\n${conversation}`,
-      systemPrompt: 'Kamu adalah sistem ekstraksi memori percakapan. Gunakan tool yang tersedia untuk melaporkan hasil. Jangan mengulang fakta yang sudah umum/trivial.',
+      systemPrompt: 'Kamu adalah sistem ekstraksi memori percakapan. Gunakan fungsi yang tersedia untuk melaporkan hasil. Jangan mengulang fakta yang sudah umum/trivial.',
       tools: [tool],
       forceNew: true,
       useMemory: false,

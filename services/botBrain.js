@@ -165,7 +165,7 @@ async function updateUserProfile(jid, history) {
 === PERCAKAPAN ===
 ${conversation}
 
-Gunakan tool yang tersedia untuk melaporkan hasil. Kosongkan field (string kosong/array kosong) jika informasi tidak tersedia. Gabungkan dengan profil lama jika ada.`;
+Gunakan fungsi yang tersedia untuk melaporkan hasil. Kosongkan field (string kosong/array kosong) jika informasi tidak tersedia. Gabungkan dengan profil lama jika ada.`;
 
   // Task analisis/ekstraksi via tool-calling (§9 API_USAGE.md) — menggantikan
   // pola lama "minta AI balas raw JSON lalu JSON.parse manual" yang rawan
@@ -194,7 +194,7 @@ Gunakan tool yang tersedia untuk melaporkan hasil. Kosongkan field (string koson
     const result = await askAITool({
       jid: `profile_builder_${jid}`,
       userText: prompt,
-      systemPrompt: 'Kamu adalah sistem ekstraksi profil. Gunakan tool yang tersedia untuk melaporkan hasil.',
+      systemPrompt: 'Kamu adalah sistem ekstraksi profil. Gunakan fungsi yang tersedia untuk melaporkan hasil.',
       tools: [profileTool],
       model: config.ai.taskModel,
     });
@@ -268,7 +268,7 @@ Waktu sekarang: ${nowLocale} (ISO: ${now})
 === PESAN USER ===
 ${userMessages}
 
-Gunakan tool yang tersedia untuk melaporkan event yang ditemukan (followUpAt dalam format ISO 8601). Jika tidak ada event, panggil tool dengan array events kosong.`;
+Gunakan fungsi yang tersedia untuk melaporkan event yang ditemukan (followUpAt dalam format ISO 8601). Jika tidak ada event, panggil fungsi dengan array events kosong.`;
 
   const followUpTool = buildFunctionTool(
     'report_followup_events',
@@ -298,7 +298,7 @@ Gunakan tool yang tersedia untuk melaporkan event yang ditemukan (followUpAt dal
     const result = await askAITool({
       jid: `followup_extractor_${jid}`,
       userText: prompt,
-      systemPrompt: 'Kamu adalah sistem deteksi event. Gunakan tool yang tersedia untuk melaporkan hasil.',
+      systemPrompt: 'Kamu adalah sistem deteksi event. Gunakan fungsi yang tersedia untuk melaporkan hasil.',
       tools: [followUpTool],
       model: config.ai.taskModel,
     });
@@ -529,13 +529,13 @@ async function thinkAndActForJid(jid) {
     const result = await askAITool({
       jid: `brain_${jid}`,
       userText: prompt,
-      systemPrompt: 'Kamu adalah sistem keputusan percakapan WhatsApp. Buat keputusan holistik terbaik lalu gunakan tool yang tersedia untuk melaporkannya.',
+      systemPrompt: 'Kamu adalah sistem keputusan percakapan WhatsApp. Buat keputusan holistik terbaik lalu gunakan fungsi yang tersedia untuk melaporkannya.',
       tools: [decisionTool],
       model: config.ai.taskModel,
     });
 
     if (result.name !== 'make_decision') {
-      throw new Error('AI tidak memanggil tool make_decision');
+      throw new Error('AI tidak memanggil fungsi make_decision');
     }
     decision = result.args;
 

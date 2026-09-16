@@ -5,6 +5,47 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [6.3.0] — 2026-09-15
+
+Ditemukan lewat analisa mendalam commit `2d45720` ("Update AiService", migrasi
+ke gateway PAF-Model) dibandingkan dengan source code scraper resmi
+(`scrapers/qwen_scraper.py` / `deepseek_scraper.py` di repo FiePaw/PAF-Model,
+fungsi `_build_wrapped_prompt`). Dua bug konkret ditemukan yang menjelaskan
+kualitas respons Qwen yang kurang sesuai.
+
+### Fixed
+- **Kata "tool"/"tools" dihapus dari SEMUA teks yang benar-benar dikirim ke
+  Qwen/DeepSeek** (system prompt, `intentDefinition`, instruksi task) —
+  diganti "fungsi"/"aksi". Source code scraper PAF-Model sendiri memperingatkan
+  kata ini memicu mekanisme tool-calling INTERNAL bawaan browser Qwen/DeepSeek,
+  menyebabkan model bingung antara instruksi kita vs mekanisme bawaannya.
+  Terdampak: `services/Intentsessionservice.js` (`BASE_PROMPT`),
+  `services/botBrain.js` (4 systemPrompt), `services/memoryService.js`
+  (2 systemPrompt), `plugins/triggered/Sendmessage.js` (`intentDefinition`),
+  `plugins/scheduled/economicNews.js` (instruksi + retry prompt).
+- **Instruksi krusial dipindah/diduplikasi ke `tools[].function.description`**
+  — untuk Qwen, HANYA isi `tools` yang dijamin masuk ke blok `[SYSTEM CONTEXT]`
+  berprioritas tinggi milik gateway; `systemPrompt` bebas hanya nebeng di
+  `[USER REQUEST]` (lihat `_build_wrapped_prompt`). `core/Triggeredpluginhandler.js`
+  → `getIntentToolSchemas()` sekarang menduplikasi aturan "panggil HANYA jika
+  yakin" ke SETIAP `function.description`, di-resend di setiap pesan (bukan
+  cuma sekali di `initIntentSession()` seperti `BASE_PROMPT`).
+  `plugins/scheduled/economicNews.js` → aturan format kunci (plain text,
+  `sourceUrl` terpisah, no duplikat, `hot` hanya untuk kasus luar biasa)
+  diduplikasi ke `economicNewsTool` description.
+
+### Changed
+- **Seluruh request ke backend Qwen kini dipaksa `think_mode: 'thinking'`**
+  (deep reasoning), terlepas dari nilai yang diminta caller — dipusatkan di
+  `sendRequest()` (`services/aiService.js`) via `resolvedThinkMode` sehingga
+  otomatis berlaku ke semua titik panggilan (`askAI`, `askAISegmented`,
+  `askAITool`, `describeImage`, `intentSessionService`, `botBrain`,
+  `memoryService`, `economicNews`). `generateImage`/`generateVideo`/`webSearch`
+  (selalu Qwen-only, tidak lewat `sendRequest`) juga diberi `think_mode: 'thinking'`
+  langsung. DeepSeek tidak terdampak — tetap memakai `thinkMode` apa adanya.
+
+---
+
 ## [6.2.0] — 2026-09-03 (hotfix #2, hari yang sama)
 
 Ditemukan lewat log produksi: owner tanya "apa yang lu inget?" — sesi intent

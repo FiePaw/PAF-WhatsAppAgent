@@ -58,7 +58,14 @@ let _cachedTools = null;
 // ─── Base system prompt ──────────────────────────────────────────────────
 // Mendefinisikan PERAN Qwen dalam session ini: pantau pesan, panggil tool
 // yang sesuai jika ada aksi nyata, atau tidak melakukan apapun jika tidak.
-const BASE_PROMPT = `Kamu adalah intent detector yang terintegrasi dalam percakapan WhatsApp. Tugasmu adalah memantau setiap pesan dari owner dan menentukan apakah pesan tersebut mengandung instruksi aksi nyata yang harus dieksekusi oleh bot. Kamu punya akses ke sejumlah tools/function — panggil TEPAT SATU tool yang paling sesuai jika pesan mengandung instruksi aksi nyata dan informasinya cukup untuk mengisi parameter tool tersebut. Jika pesan TIDAK mengandung instruksi aksi, atau informasi belum cukup untuk memanggil tool manapun dengan yakin, JANGAN memanggil tool apapun — cukup balas dengan teks singkat apa saja (balasan teks ini tidak akan ditampilkan ke siapapun, hanya dianggap "tidak ada aksi").`;
+// ⚠️ PENTING: JANGAN gunakan kata "tool"/"tools" di teks manapun yang dikirim
+// ke Qwen/DeepSeek (system prompt, intentDefinition, dsb) — kata itu memicu
+// mekanisme tool-calling INTERNAL bawaan browser Qwen/DeepSeek sendiri (lihat
+// komentar _build_wrapped_prompt di scrapers/qwen_scraper.py & deepseek_scraper.py
+// pada repo FiePaw/PAF-Model: "Avoid the literal word that triggers Qwen/DeepSeek's
+// internal tool registry; describe them as client-side 'functions' instead").
+// Selalu pakai "fungsi"/"aksi"/"perintah" sebagai gantinya di SEMUA teks AI-facing.
+const BASE_PROMPT = `Kamu adalah intent detector yang terintegrasi dalam percakapan WhatsApp. Tugasmu adalah memantau setiap pesan dari owner dan menentukan apakah pesan tersebut mengandung instruksi aksi nyata yang harus dieksekusi oleh bot. Kamu punya akses ke sejumlah fungsi eksternal — panggil TEPAT SATU fungsi yang paling sesuai jika pesan mengandung instruksi aksi nyata dan informasinya cukup untuk mengisi parameter fungsi tersebut. Jika pesan TIDAK mengandung instruksi aksi, atau informasi belum cukup untuk memanggil fungsi manapun dengan yakin, JANGAN memanggil fungsi apapun — cukup balas dengan teks singkat apa saja (balasan teks ini tidak akan ditampilkan ke siapapun, hanya dianggap "tidak ada aksi").`;
 
 // ─── Build daftar tools dari triggered plugins ──────────────────────────
 /**
@@ -121,7 +128,7 @@ export async function initIntentSession(senderJid) {
       tools,
       tool_choice: 'auto',
       stream: false,
-      think_mode: 'fast', // intent detection tidak butuh deep reasoning
+      think_mode: 'thinking', // semua panggilan backend Qwen dipaksa thinking (lihat sendRequest di aiService.js)
     });
 
     const sessionId =
@@ -196,7 +203,7 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
       tools,
       tool_choice: 'auto',
       stream: false,
-      think_mode: 'fast',
+      think_mode: 'thinking', // semua panggilan backend Qwen dipaksa thinking
     };
 
     // Sertakan attachment gambar jika ada

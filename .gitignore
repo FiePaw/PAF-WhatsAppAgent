@@ -1,3 +1,5 @@
 auth/*
 data/*
 auth/
+auth/session/
+auth/session/*
