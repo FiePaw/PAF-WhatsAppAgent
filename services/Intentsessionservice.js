@@ -37,6 +37,7 @@
 import axios from 'axios';
 import config from '../config/config.js';
 import { extractToolCall } from '../utils/toolCalling.js';
+import { getPreciseTimeString } from './contextEnricher.js';
 import logger from '../utils/logger.js';
 
 const client = axios.create({
@@ -197,9 +198,17 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
   try {
     const { tools } = await _buildToolsAndPrompt();
 
+    // [Fitur 4 · Bot Memahami Waktu] Sesi intent tidak pernah rebuild system
+    // prompt per pesan (BASE_PROMPT cuma dikirim sekali di initIntentSession),
+    // jadi konteks waktu presisi disuntikkan di sini -- di content pesan yang
+    // dikirim SETIAP kali (pola sama seperti reinforcedDefinition di
+    // getIntentToolSchemas() yang juga di-resend tiap pesan, bukan cuma sekali
+    // di awal seperti BASE_PROMPT).
+    const timeContext = `[Konteks waktu sekarang: ${getPreciseTimeString()}]`;
+
     const body = {
       model: config.ai.taskModel,
-      messages: [{ role: 'user', content: text }],
+      messages: [{ role: 'user', content: `${timeContext}\n${text}` }],
       tools,
       tool_choice: 'auto',
       stream: false,

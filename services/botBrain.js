@@ -25,6 +25,7 @@ import { getActiveJids, getAllKnownJids, getHistory, pruneAllOldMessages } from 
 import { getPresence, subscribePresence, subscribeAll } from './presenceService.js';
 import { askAI, askAISegmented, askAITool } from './aiService.js';
 import { getPersona } from './personaService.js';
+import { buildEnrichedContext } from './contextEnricher.js';
 import { replySegmented } from '../utils/delay.js';
 import { buildFunctionTool } from '../utils/toolCalling.js';
 import db from './db.js';
@@ -51,6 +52,8 @@ function getState(jid) {
     lastSentAt:     null,
     lastSentMsgId:  null,   // message ID terakhir yang dikirim bot (untuk track receipt)
     lastReadAt:     null,   // kapan pesan terakhir bot dibaca user
+    lastInjectedReason: null, // [Fix Bug 1] reason laporan BotBrain terakhir yang diinject ke session (dedupe)
+    sendFailureStreak:  0,    // [Fix Bug 1] jumlah kegagalan kirim pesan proaktif berturut-turut (untuk backoff)
   };
 }
 
@@ -387,7 +390,7 @@ function buildTimeContext(history) {
 
 // ─── Main Decision Prompt ─────────────────────────────────────────────────────
 
-function buildBrainPrompt({ jid, history, presence, profileText, followUpsText, timeText, readStatus }) {
+function buildBrainPrompt({ jid, history, presence, profileText, followUpsText, timeText, eventText, readStatus }) {
   const firstSent = history[0]?.firstSent ?? '-';
   const lastSent  = history[history.length - 1]?.lastSent ?? '-';
   const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
@@ -411,7 +414,7 @@ function buildBrainPrompt({ jid, history, presence, profileText, followUpsText, 
     })
     .join('\n');
 
-  const contextBlocks = [profileText, timeText, followUpsText]
+  const contextBlocks = [profileText, timeText, followUpsText, eventText]
     .filter(Boolean).join('\n\n');
 
   return `Kamu adalah teman dekat yang sedang menganalisa percakapan WhatsApp dan membuat keputusan terbaik secara holistik.
@@ -503,7 +506,14 @@ async function thinkAndActForJid(jid) {
   const timeText     = buildTimeContext(history);
   const readStatus   = readReason;
 
-  const prompt = buildBrainPrompt({ jid, history, presence, profileText, followUpsText, timeText, readStatus });
+  // [Fitur 4 · Bot Memahami Waktu] "Menghidupkan" buildEnrichedContext() —
+  // sebelumnya dead code, tidak pernah dipanggil di manapun. Dipakai di sini
+  // khusus untuk bagian Event Awareness-nya (hari besar nasional + event
+  // personal dari userProfile.goals); followUps dikosongkan karena
+  // followUpsText di atas sudah menghasilkan blok yang sama agar tidak duplikat.
+  const eventText = buildEnrichedContext({ history, userProfile: getUserProfile(jid), followUps: '' });
+
+  const prompt = buildBrainPrompt({ jid, history, presence, profileText, followUpsText, timeText, eventText, readStatus });
 
   const decisionTool = buildFunctionTool(
     'make_decision',
@@ -549,8 +559,14 @@ async function thinkAndActForJid(jid) {
     return;
   }
 
-  // ── Eksekusi: kirim pesan ─────────────────────────────────────────────────
+  // ── Eksekusi: kirim pesan ──────────────────────────────────────────
+  // [Fix Bug 1 · Context Pollution — bagian backoff] Lacak status
+  // pengiriman (sent/failed/skipped) untuk dipakai di bawah: kalau gagal
+  // terkirim berturut-turut, naikkan interval analisa bertahap alih-alih
+  // retry terus dengan interval tetap 15-20 menit (lihat sendFailureStreak).
   let sentMsgId = null;
+  let sendStatus = 'skipped'; // 'sent' | 'failed' | 'skipped' (tidak ada pesan yang perlu dikirim siklus ini)
+
   if (decision.message?.trim()) {
     const sock = global._sock;
     if (sock) {
@@ -568,15 +584,21 @@ async function thinkAndActForJid(jid) {
         // Untuk tracking read receipt, kirim sendMessage terakhir dan ambil ID-nya
         // replySegmented sudah kirim semua segmen — ambil sentAt saja tanpa msgId
         sentMsgId = null; // msgId tidak bisa diambil dari replySegmented secara langsung
+        sendStatus = 'sent';
 
         logger.info({ jid, segments: segments.length, preview: decision.message.slice(0, 60) }, '📤 botBrain: pesan proaktif terkirim (segmented)');
       } catch (err) {
+        sendStatus = 'failed';
         logger.error({ jid, err: err.message }, '❌ botBrain: gagal kirim pesan proaktif');
       }
+    } else {
+      // Bot sedang offline/disconnect — pesan yang seharusnya dikirim tidak bisa terkirim sama sekali
+      sendStatus = 'failed';
+      logger.warn({ jid }, '⚠️ botBrain: sock tidak tersedia, pesan proaktif gagal terkirim');
     }
   }
 
-  // ── Eksekusi: tandai follow-up selesai ────────────────────────────────────
+  // ── Eksekusi: tandai follow-up selesai ────────────────────────────
   if (decision.resolvedFollowUps?.length) {
     for (const id of decision.resolvedFollowUps) {
       await markFollowUpDone(id).catch(() => {});
@@ -584,7 +606,7 @@ async function thinkAndActForJid(jid) {
     logger.debug({ jid, resolved: decision.resolvedFollowUps.length }, '✅ botBrain: follow-up ditandai selesai');
   }
 
-  // ── Eksekusi: perbarui profil parsial dari keputusan Qwen ─────────────────
+  // ── Eksekusi: perbarui profil parsial dari keputusan Qwen ─────────
   if (decision.profileUpdates && Object.keys(decision.profileUpdates).length > 0) {
     const existing = getUserProfile(jid) ?? {};
     await db.upsert(PROFILE_COL, { jid }, {
@@ -596,19 +618,86 @@ async function thinkAndActForJid(jid) {
     logger.debug({ jid }, '👤 botBrain: profil diperbarui parsial dari keputusan');
   }
 
-  // ── Inject konteks ke session chat JID ────────────────────────────────────
-  // Pakai session yang sama dengan jid → harus konsisten dengan backend yang
-  // dipakai sesi chat tsb (default deepseek, tidak override model di sini)
-  try {
-    const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
-    const contextMsg = `[SISTEM - BotBrain Report @ ${now}]\nKontak: ${jid}\nRingkasan: ${decision.contextSummary}\nAlasan: ${decision.reason}\n${decision.message?.trim() ? `Pesan dikirim: "${decision.message}"` : 'Tidak ada pesan dikirim'}`;
-    await askAI({ jid, userText: contextMsg, systemPrompt });
-  } catch (err) {
-    logger.warn({ jid, err: err.message }, '⚠️ botBrain: gagal inject konteks ke session');
+  // ── Inject konteks ke session chat JID ────────────────────────────
+  // [Fix Bug 1 · Context Pollution dari BotBrain Report] Sebelumnya SELALU
+  // inject laporan telemetri ke live chat session via askAI() tanpa syarat
+  // apapun. Tiga masalah nyata yang ditemukan:
+  //   1. askAI() bukan sekadar "menulis" ke history — ia MEMINTA model
+  //      benar-benar generate balasan terhadap contextMsg. Balasan itu
+  //      dibuang (tidak dikirim ke user) tapi tetap tersimpan sebagai turn
+  //      TERAKHIR di history sesi. Saat user lalu bertanya sesuatu yang
+  //      ambigu ("jelasin itu"), model me-resolve pronoun ke turn terakhir
+  //      itu — laporan sistem, bukan topik percakapan asli (mis. file yang
+  //      baru dibahas). Fix di bawah (poin c) meminta balasan sangat
+  //      singkat supaya turn terakhir tetap minim dan tidak "membajak" topik.
+  //   2. `contextSummary`/`reason` ditandai `required` di schema, tapi
+  //      backend Qwen di sini adalah browser-automation scraper (bukan
+  //      function-calling API tervalidasi) — `required` tidak benar-benar
+  //      dijamin server. Field kosong/undefined bisa lolos ke contextMsg
+  //      sebagai "Ringkasan: undefined" yang menambah noise. Fix (poin a):
+  //      skip total kalau field itu kosong.
+  //   3. Tanpa dedupe, laporan dengan `reason` IDENTIK bisa terus diinject
+  //      setiap siklus (~15-20 menit) tanpa henti kalau situasi tidak
+  //      berubah (kasus riil: 29 jam nonstop). Fix (poin b): skip kalau
+  //      `reason` sama dengan laporan terakhir yang diinject untuk jid ini.
+  //
+  // Keputusan: tetap Opsi C (hybrid) — tetap inject ke live session (tidak
+  // mengubah desain besar/mekanisme lain), tapi disaring lewat 3 guard di
+  // atas. Catatan: mekanisme pemahaman file/gambar (recordImageToHistory di
+  // core/messageHandler.js, via describeImage/describeDocument) SEPENUHNYA
+  // TERPISAH dari blok ini — fix ini tidak berdampak ke kemampuan bot
+  // memahami isi file yang dikirim user.
+  const currentState = getState(jid);
+  let lastInjectedReason = currentState.lastInjectedReason || null;
+
+  const hasValidReport = !!decision.contextSummary?.trim() && !!decision.reason?.trim();
+  const isDuplicateReport = hasValidReport && decision.reason.trim() === lastInjectedReason;
+
+  if (!hasValidReport) {
+    // (a) Sanitasi wajib — field kosong/undefined, laporan tidak berguna
+    logger.debug({ jid }, '⏭️ botBrain: laporan tidak lengkap (contextSummary/reason kosong), injeksi ke session di-skip');
+  } else if (isDuplicateReport) {
+    // (b) Dedupe/throttle — reason identik dengan siklus sebelumnya
+    logger.debug({ jid, reason: decision.reason.trim().slice(0, 60) }, '⏭️ botBrain: laporan identik dengan siklus sebelumnya, injeksi ke session di-skip (dedupe)');
+  } else {
+    try {
+      const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+      const summary = decision.contextSummary.trim();
+      const reason = decision.reason.trim();
+      // (c) Framing eksplisit + minta balasan minimal — supaya turn
+      // terakhir di history tetap singkat, tidak merebut topik percakapan.
+      const contextMsg = `[SISTEM - BotBrain Report @ ${now}]\nKontak: ${jid}\nRingkasan: ${summary}\nAlasan: ${reason}\n${decision.message?.trim() ? `Pesan dikirim: "${decision.message.trim()}"` : 'Tidak ada pesan dikirim'}\n\n[INSTRUKSI KHUSUS UNTUK LAPORAN INI: Ini catatan internal sistem, BUKAN pesan dari user — jangan dijelaskan atau dibahas. Balas HANYA dengan satu kata singkat seperti "noted" atau "ok".]`;
+      await askAI({ jid, userText: contextMsg, systemPrompt });
+      lastInjectedReason = reason;
+      logger.debug({ jid, reason: reason.slice(0, 60) }, '📥 botBrain: laporan diinject ke session (dengan framing balasan minimal)');
+    } catch (err) {
+      logger.warn({ jid, err: err.message }, '⚠️ botBrain: gagal inject konteks ke session');
+    }
   }
 
-  // ── Simpan state ──────────────────────────────────────────────────────────
-  const stateUpdate = { nextAnalyzeAt: resolveNextAnalyzeAt(decision.nextAnalyzeIn) };
+  // ── Simpan state ───────────────────────────────────────────────────
+  // [Fix Bug 1 · backoff] Naikkan interval analisa bertahap (20m → 45m →
+  // 1h) kalau pesan gagal terkirim berturut-turut, reset ke normal begitu
+  // berhasil terkirim lagi. Siklus tanpa pesan sama sekali ('skipped')
+  // tidak mempengaruhi streak — hanya kegagalan pengiriman nyata yang dihitung.
+  let sendFailureStreak = currentState.sendFailureStreak || 0;
+  if (sendStatus === 'failed') {
+    sendFailureStreak += 1;
+    logger.warn({ jid, sendFailureStreak }, '⏳ botBrain: pesan gagal terkirim, backoff interval analisa dinaikkan');
+  } else if (sendStatus === 'sent') {
+    sendFailureStreak = 0;
+  }
+
+  const BACKOFF_LADDER = ['20m', '45m', '1h'];
+  const effectiveNextAnalyzeIn = sendFailureStreak > 0
+    ? BACKOFF_LADDER[Math.min(sendFailureStreak - 1, BACKOFF_LADDER.length - 1)]
+    : decision.nextAnalyzeIn;
+
+  const stateUpdate = {
+    nextAnalyzeAt: resolveNextAnalyzeAt(effectiveNextAnalyzeIn),
+    lastInjectedReason,
+    sendFailureStreak,
+  };
   if (sentMsgId) {
     stateUpdate.lastSentAt    = new Date().toISOString();
     stateUpdate.lastSentMsgId = sentMsgId;

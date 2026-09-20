@@ -5,6 +5,183 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [6.4.3] — 2026-09-18
+
+Fix root cause SEBENARNYA dari bug `myFinance "params: {}"` (lanjutan
+[6.4.2] — perbaikan sebelumnya baru menutupi simptomnya, bukan akar
+masalahnya). Ditemukan lewat log produksi baru: `extractToolCall` memang
+mendeteksi kegagalan, tapi salah diagnosa.
+
+### Fixed
+- **`utils/toolCalling.js`** — akar masalah sebenarnya: gateway PAF-Model
+  (browser-automation, bukan API OpenAI resmi) **tidak konsisten** soal
+  bentuk `tool_call.function.arguments`. Kadang berupa string JSON-encoded
+  (sesuai spek OpenAI, diasumsikan kode lama), tapi kadang berupa **OBJECT
+  JS MENTAH langsung** — saat itu terjadi, `JSON.parse(object)` SELALU
+  gagal karena JS meng-coerce object ke string `"[object Object]"` dulu
+  sebelum mencoba parse, bukan membaca isinya. Akibatnya `args` selalu
+  jatuh ke `{}` walau model sebenarnya sudah mengisi semua field dengan
+  benar (contoh nyata dari log: `{action: "addTransaction", type: "income",
+  amount: 100000}` dianggap gagal parse padahal datanya lengkap dan valid).
+  Fungsi baru `parseToolArguments()` menangani KEDUA bentuk: string →
+  `JSON.parse()` seperti biasa; object → dipakai langsung tanpa parsing.
+  Diterapkan di `extractToolCall()` dan `extractAllToolCalls()`.
+
+---
+
+## [6.4.2] — 2026-09-18
+
+Fix laporan bug produksi: `myFinance` membalas "⚠️ Aksi tidak dikenali"
+dengan log `params: {}` — intent terdeteksi tapi TIDAK ADA parameter apapun
+yang berhasil diekstrak model (bukan sekadar `action` di luar enum).
+
+### Fixed
+- **`utils/toolCalling.js`** (`extractToolCall()`) — sebelumnya kegagalan
+  `JSON.parse()` atas `arguments` tool_call ditelan diam-diam (fallback ke
+  `{}` tanpa jejak). Sekarang di-log sebagai `logger.warn` berisi raw string
+  `arguments` — akar masalah (JSON tidak valid dari backend browser-
+  automation scraper Qwen) sekarang terlihat di log, bukan hilang begitu saja.
+- **`core/triggeredPluginHandler.js`** (`handleTriggeredPlugin()`) — tambah
+  guard: jika intent terdeteksi tapi `params` benar-benar kosong (`{}`),
+  TIDAK diteruskan ke plugin (yang pasti gagal validasi & membalas error
+  generik membingungkan) — di-treat sebagai "tidak ada aksi terdeteksi",
+  fallback ke AI chat biasa seperti saat intent `null`. Berlaku untuk semua
+  triggered plugin, bukan hanya myFinance.
+- **`plugins/triggered/myFinance.js`** — lapis pertahanan kedua: guard
+  eksplisit jika `action` kosong meski `params` punya field lain (mis. model
+  cuma kirim `{ amount: 20000 }` tanpa `action`) — pesan error sekarang
+  actionable (kasih contoh format) alih-alih "Aksi tidak dikenali" generik,
+  plus logging `params` mentah untuk diagnosa ke depan.
+
+---
+
+## [6.4.1] — 2026-09-18
+
+Fix 3 bug ditemukan lewat sesi analisa kode mendalam (lihat dokumen rencana
+perbaikan bug untuk detail root cause lengkap).
+
+### Fixed — Bug 1: Context Pollution dari BotBrain Report
+- **Gejala**: follow-up question ambigu user ("jelasin itu") setelah bot
+  menjelaskan isi file kadang dibalas dengan penjelasan `BotBrain Report`
+  yang tidak nyambung, bukan lanjutan topik file.
+- **Root cause**: `askAI()` di `services/botBrain.js` meminta model
+  benar-benar generate balasan terhadap laporan telemetri internal — balasan
+  itu dibuang tapi tetap jadi turn terakhir di history sesi, sehingga
+  pronoun resolution user berikutnya salah sasaran. Diperparah field
+  `contextSummary`/`reason` yang bisa `undefined` (backend Qwen adalah
+  browser-automation scraper, `required` di schema tidak divalidasi server)
+  dan tidak ada dedupe (laporan identik bisa berulang nonstop berjam-jam).
+- **Fix (Opsi C — hybrid)**: tetap inject ke live session, tapi (a) skip
+  total jika `contextSummary`/`reason` kosong, (b) dedupe — skip jika
+  `reason` identik dengan laporan terakhir untuk jid yang sama
+  (`state.lastInjectedReason`), (c) instruksi eksplisit minta balasan
+  sangat singkat ("noted"/"ok"). Tambahan: `sendFailureStreak` per jid —
+  interval analisa naik bertahap (20m → 45m → 1h) saat pesan proaktif gagal
+  terkirim berturut-turut, reset saat berhasil.
+- Mekanisme pemahaman file/gambar (`describeImage`/`describeDocument` di
+  `core/messageHandler.js`) sepenuhnya terpisah — tidak terdampak fix ini.
+
+### Fixed — Bug 2 & 3: Double-Reply Race Condition (Intent Plugin vs AI Chat)
+- **Gejala**: satu pesan owner kadang dibalas 2x (chat generik + `⚠️ Aksi
+  tidak dikenali` dari plugin), atau bot **berhalusinasi** seolah transaksi
+  keuangan berhasil dicatat padahal tidak pernah benar-benar tersimpan.
+- **Root cause**: `core/messageHandler.js` menjalankan intent detection dan
+  AI chat **paralel** dengan guard `Promise.race` yang secara fundamental
+  tidak reliable di JavaScript untuk mendeteksi urutan penyelesaian, dan
+  sama sekali tidak bisa mencegah plugin triggered mengirim reply-nya
+  sendiri (`interceptedReply` di `core/triggeredPluginHandler.js`)
+  independen dari status AI chat.
+- **Fix (Opsi A — sequential)**: intent detection dijalankan dulu (timeout
+  20 detik), baru fallback ke AI chat jika tidak ada intent yang cocok —
+  hanya satu jalur yang pernah reply. Tambahan `replyGuard` menutup celah
+  residual: karena JS tidak punya cancellation, plugin yang baru selesai
+  SETELAH timeout (saat AI chat sudah reply) akan diabaikan, bukan ikut
+  mengirim balasan dobel. Diterapkan konsisten di jalur owner DM dan grup.
+  Trade-off yang disadari: menambah latensi ke semua pesan owner.
+- `plugins/triggered/myFinance.js` — tambah `logger.warn` dengan `action`
+  mentah + `params` saat fallback "Aksi tidak dikenali", untuk memudahkan
+  diagnosa drift enum akibat backend non-function-calling asli.
+
+---
+
+## [6.4.0] — 2026-09-17
+
+Implementasi 4 fitur baru sesuai `rencana-fitur-baru-PAF-WhatsAppAgent.md`,
+plus perbaikan bug kritis yang ditemukan lewat audit menyeluruh codebase
+sebelum pengerjaan fitur dimulai.
+
+### Fixed (Kritis — Blocker)
+- **Case-sensitivity nama file** — `services/Intentsessionservice.js` dan
+  `core/Triggeredpluginhandler.js` disimpan dengan nama file berbeda case
+  dari yang dipakai di SEMUA statement `import` di seluruh codebase
+  (`intentSessionService.js` / `triggeredPluginHandler.js`). Ini membuat bot
+  **gagal start total** (`Cannot find module`) di server manapun yang
+  case-sensitive (Linux) — kemungkinan bot ini hanya pernah dijalankan di
+  Windows/Mac (case-insensitive) sebelumnya. Diperbaiki dengan rename file
+  agar konsisten dengan seluruh import.
+- `plugins/ai.js` mereferensikan `config.ownerPersona`/`config.regularPersona`
+  yang sudah tidak ada sejak migrasi persona ke `config/persona.json`
+  (`personaService`) — command `!ai` selalu mengirim system prompt
+  `undefined`. Diperbaiki untuk pakai `getPersona()` seperti alur chat biasa.
+- `plugins/persona.js` sub-command `!persona get` menampilkan `[object
+  Object]` karena `getPersona()` sekarang return `{ prompt, model }`, bukan
+  string langsung.
+
+### Added — Fitur 1: Membaca & Memahami Isi File (PDF, DOCX, PPTX, dll)
+- `core/messageHandler.js` — deteksi `documentMessage`/
+  `documentWithCaptionMessage`, ekstrak sebagai attachment base64 (Opsi B:
+  file dikirim utuh ke Qwen, tanpa ekstraksi teks lokal), digabung ke array
+  `attachments` generik yang sama dengan gambar.
+- `services/aiService.js` — `describeDocument()`, meringkas isi dokumen lalu
+  dicatat ke `chatHistory` dengan prefix `[Dokumen: <nama file>]`.
+
+### Added — Fitur 2: Approval Owner untuk Membalas Nomor Lain
+- `services/approvalStore.js` (baru) — whitelist/blocklist per JID + pending
+  request map, pola sama `sessionStore.js` (in-memory + persist DB +
+  auto-cleanup). Whitelist expired dibuang otomatis; pending tanpa respons
+  owner 24 jam → auto-deny (masuk blocklist).
+- `core/messageHandler.js` — non-owner tanpa status dulu masuk alur approval
+  (bot generate pemahaman singkat pesan via AI, kirim notifikasi ke owner,
+  TIDAK membalas sender); owner reply ke notifikasi diinterpretasi via
+  `askAITool` (bukan keyword kaku) untuk approve (dengan durasi custom
+  opsional)/deny; pesan yang menumpuk saat pending diproses semua begitu
+  di-approve.
+- `plugins/approval.js` (baru) — command manual `!approve <nomor> [jam]`,
+  `!block <nomor>`, `!unblock <nomor>`, `!approvals` (lihat pending).
+
+### Added — Fitur 3: Konteks dari URL Instagram/TikTok
+- `services/socialMediaService.js` (baru) — deteksi URL Instagram/TikTok di
+  teks pesan, download via binary eksternal `yt-dlp` (child process,
+  tanpa dependency npm tambahan), convert ke attachment base64 + ekstrak
+  metadata (judul/deskripsi) sebagai fallback konteks teks. Opsi B: video
+  dikirim mentah ke Qwen, tanpa transcribe/frame-extraction lokal.
+- `config/config.js` — `config.socialMedia.{instagram,tiktok}CookiesPath`
+  (dari `.env`, opsional) untuk akses konten privat via cookies akun owner.
+- `services/aiService.js` — `describeSocialMedia()`, meringkas isi video lalu
+  dicatat ke `chatHistory` dengan prefix `[Video dari <url>]`.
+- ⚠️ **Kebutuhan operasional**: binary `yt-dlp` (Python) harus terinstall
+  terpisah di server dan di-update berkala. Mengakses konten privat via
+  cookies melanggar ToS Instagram/TikTok — risiko akun owner kena
+  flag/suspend (sudah disetujui sadar, lihat dokumen rencana fitur).
+
+### Added — Fitur 4: Bot Memahami Waktu
+- `services/contextEnricher.js` — `getPreciseTimeString()` baru: tanggal &
+  jam presisi WIB (`Intl.DateTimeFormat`, timeZone eksplisit), menggantikan
+  label kasar "pagi/siang/sore/malam" yang sudah ada.
+- `services/aiService.js` — `buildContextHintsBlock()` kini SELALU
+  menyertakan waktu presisi (bukan hanya saat `contextHints` ada) — otomatis
+  mencakup semua jalur `askAISegmented` (chat utama + pesan proaktif/
+  follow-up `botBrain`).
+- `services/intentSessionService.js` — waktu presisi disuntikkan ke content
+  pesan yang dikirim ke intent session Qwen SETIAP pesan (sesi ini tidak
+  rebuild system prompt per pesan).
+- `services/botBrain.js` — "menghidupkan" `buildEnrichedContext()` yang
+  sebelumnya dead code (tidak pernah dipanggil) untuk Event Awareness (hari
+  besar nasional + event personal dari `userProfile.goals`) di prompt
+  keputusan holistik.
+
+---
+
 ## [6.3.0] — 2026-09-15
 
 Ditemukan lewat analisa mendalam commit `2d45720` ("Update AiService", migrasi

@@ -185,6 +185,23 @@ export async function handleTriggeredPlugin(ctx) {
     return false;
   }
 
+  // [Fix myFinance "params: {}"] Model (browser-automation scraper Qwen,
+  // bukan function-calling API tervalidasi) kadang memanggil tool tapi
+  // GAGAL mengekstrak parameter apapun — args kosong total {}. Ini bukan
+  // sinyal intent yang bisa diandalkan (setiap triggered plugin butuh
+  // minimal satu parameter nyata untuk bisa berbuat sesuatu), jadi alih-
+  // alih meneruskan ke plugin (yang pasti akan gagal validasi & membalas
+  // pesan error generik seperti "Aksi tidak dikenali" yang membingungkan
+  // user), treat sebagai "tidak ada aksi terdeteksi" dan fallback ke AI
+  // chat biasa — sama seperti saat intent null sama sekali.
+  if (!params || Object.keys(params).length === 0) {
+    logger.warn(
+      { intent, sender: sender.split('@')[0] },
+      '⚠️ Intent terdeteksi tapi params kosong total (model gagal ekstrak parameter) — fallback ke AI chat'
+    );
+    return false;
+  }
+
   logger.info({ intent, params, sender: sender.split('@')[0] }, '⚡ Triggered plugin dijalankan');
 
   // ── Intercept reply dari plugin ──────────────────────────────────────────

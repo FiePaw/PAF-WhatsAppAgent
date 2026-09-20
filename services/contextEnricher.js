@@ -99,6 +99,39 @@ function analyzeActivityPattern(history) {
 }
 
 /**
+ * [Fitur 4 · Bot Memahami Waktu] String tanggal & jam presisi WIB,
+ * mis: "Kamis, 17 September 2026, 14:32 WIB".
+ *
+ * Menggunakan Intl.DateTimeFormat dengan timeZone eksplisit ('Asia/Jakarta')
+ * alih-alih WIB_OFFSET manual di atas — lebih robust untuk perubahan aturan
+ * zona waktu di masa depan (meski WIB sendiri tidak mengenal DST).
+ *
+ * Dipakai oleh services/aiService.js (buildContextHintsBlock, semua jalur
+ * askAISegmented) dan services/intentSessionService.js (setiap pesan ke
+ * intent session) agar bot selalu tahu tanggal & jam presisi, bukan cuma
+ * label kasar "pagi/siang/sore/malam".
+ *
+ * @returns {string}
+ */
+export function getPreciseTimeString() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Jakarta',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+
+  const get = (type) => parts.find((p) => p.type === type)?.value ?? '';
+
+  return `${get('weekday')}, ${get('day')} ${get('month')} ${get('year')}, ${get('hour')}:${get('minute')} WIB`;
+}
+
+/**
  * Format time context untuk prompt.
  * @param {object[]} history
  * @returns {string}
@@ -108,6 +141,7 @@ function formatTimeContext(history) {
   const { peakHours, isUsuallyActiveNow, hasMessageToday } = analyzeActivityPattern(history);
 
   const lines = ['=== KONTEKS WAKTU ==='];
+  lines.push(`Tanggal & jam sekarang: ${getPreciseTimeString()}`);
   lines.push(`Waktu sekarang: ${label} (WIB)`);
   lines.push(`Tone yang disarankan: ${tone}`);
 

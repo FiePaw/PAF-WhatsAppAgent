@@ -65,7 +65,8 @@ const plugin = {
       if (!number) { await reply(`❓ Gunakan: \`${prefix}persona get [nomor]\``); return; }
 
       const fakeJid = `${number}@s.whatsapp.net`;
-      const persona = getPersona(fakeJid, false);
+      // Bug fix: getPersona() sekarang return { prompt, model }, bukan string langsung
+      const { prompt: persona } = getPersona(fakeJid, false);
       await reply(`🎭 Persona untuk \`${number}\`:\n\n${persona}`);
       return;
     }

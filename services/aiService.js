@@ -34,6 +34,7 @@ import axios from 'axios';
 import config from '../config/config.js';
 import { sessionStore } from './sessionStore.js';
 import { extractToolCall } from '../utils/toolCalling.js';
+import { getPreciseTimeString } from './contextEnricher.js';
 import logger from '../utils/logger.js';
 
 // ─── Timeout ────────────────────────────────────────────────────────────
@@ -540,6 +541,110 @@ Tulis deskripsi dalam Bahasa Indonesia, padat dan informatif (2-4 kalimat).`;
   }
 }
 
+/**
+ * [Fitur 1 · Baca & Pahami Isi File] Ringkas isi sebuah dokumen (PDF, DOCX,
+ * PPTX, dll) menggunakan Qwen. Mengikuti pola describeImage() di atas —
+ * Opsi B (lihat rencana-fitur-baru-PAF-WhatsAppAgent.md): dokumen dikirim
+ * UTUH sebagai attachment base64, TIDAK ADA ekstraksi teks lokal (tanpa
+ * pdf-parse/mammoth/dll) — sepenuhnya diandalkan pada kemampuan Qwen
+ * membaca file mentah (backend browser-automation, UI aslinya mendukung
+ * upload dokumen).
+ *
+ * Menggunakan session terpisah (forceNew) agar tidak mencemari session chat
+ * user/owner. Hasil ringkasan disimpan ke chatHistory oleh caller
+ * (recordDocumentToHistory di core/messageHandler.js).
+ *
+ * @param {object} options
+ * @param {string}  options.jid         - JID pengirim (untuk logging)
+ * @param {Array}   options.attachments - [{ filename, data (base64), mime_type }]
+ * @param {string}  [options.caption]   - caption/keterangan dokumen jika ada (opsional)
+ * @returns {Promise<string|null>} ringkasan dokumen dalam bahasa Indonesia, atau null jika gagal
+ */
+export async function describeDocument({ jid, attachments, caption }) {
+  const captionNote = caption?.trim()
+    ? `Keterangan dari pengirim: "${caption.trim()}"\n\n`
+    : '';
+
+  const prompt = `${captionNote}Baca dan pahami isi dokumen ini secara menyeluruh. Berikan ringkasan yang mencakup:
+- Topik atau inti utama dokumen
+- Poin-poin penting atau temuan kunci di dalamnya
+- Informasi relevan lain yang perlu diketahui
+
+Tulis ringkasan dalam Bahasa Indonesia, padat dan informatif (3-6 kalimat sesuai kompleksitas dokumen).`;
+
+  try {
+    logger.info({ jid, hasCaption: !!caption }, '📄 Meringkas dokumen dengan Qwen...');
+
+    // Sama seperti describeImage: session terpisah + forceNew, useMemory:
+    // false karena ini task ringkasan satu kali, bukan chat.
+    const { text } = await sendRequest({
+      jid: `doc_desc_${jid}_${Date.now()}`,
+      userText: prompt,
+      attachments,
+      forceNew: true,
+      taskType: 'chat',
+      model: config.ai.taskModel,
+      useMemory: false,
+    });
+
+    logger.info({ jid }, '✅ Ringkasan dokumen selesai');
+    return text;
+  } catch (err) {
+    const status = err.response?.status;
+    const detail = err.response?.data || err.message;
+    logger.error({ jid, status, detail }, '❌ Gagal meringkas dokumen');
+    return null;
+  }
+}
+
+/**
+ * [Fitur 3 · Konteks dari URL Instagram/TikTok] Ringkas konten sebuah video
+ * (visual + audio) hasil download socialMediaService menggunakan Qwen.
+ * Mengikuti pola describeImage()/describeDocument() — Opsi B: video
+ * dikirim mentah sebagai attachment, TIDAK ADA transcribe lokal (Whisper)
+ * atau extract-frame lokal (ffmpeg).
+ *
+ * @param {object} options
+ * @param {string}  options.jid         - JID pengirim (untuk logging)
+ * @param {Array}   options.attachments - [{ filename, data (base64), mime_type }] (1 video)
+ * @param {string}  [options.caption]   - judul/deskripsi asli dari yt-dlp metadata (opsional)
+ * @returns {Promise<string|null>} ringkasan video dalam bahasa Indonesia, atau null jika gagal
+ */
+export async function describeSocialMedia({ jid, attachments, caption }) {
+  const captionNote = caption?.trim()
+    ? `Judul/deskripsi asli konten: "${caption.trim()}"\n\n`
+    : '';
+
+  const prompt = `${captionNote}Tonton dan pahami video ini (visual dan audio/narasinya). Berikan ringkasan singkat yang mencakup:
+- Isi/konten utama video
+- Poin penting yang disampaikan (jika ada narasi/dialog)
+- Konteks atau suasana keseluruhan
+
+Tulis ringkasan dalam Bahasa Indonesia, padat dan informatif (2-4 kalimat).`;
+
+  try {
+    logger.info({ jid }, '🎬 Meringkas video dari media sosial dengan Qwen...');
+
+    const { text } = await sendRequest({
+      jid: `social_desc_${jid}_${Date.now()}`,
+      userText: prompt,
+      attachments,
+      forceNew: true,
+      taskType: 'chat',
+      model: config.ai.taskModel,
+      useMemory: false,
+    });
+
+    logger.info({ jid }, '✅ Ringkasan video selesai');
+    return text;
+  } catch (err) {
+    const status = err.response?.status;
+    const detail = err.response?.data || err.message;
+    logger.error({ jid, status, detail }, '❌ Gagal meringkas video dari media sosial');
+    return null;
+  }
+}
+
 // ─── Segmented Reply ────────────────────────────────────────────────────
 
 /**
@@ -658,33 +763,39 @@ function parseSegments(raw) {
  * core/messageHandler.js — dihitung dari chatHistory sebelum askAISegmented
  * dipanggil.
  *
+ * [Fitur 4 · Bot Memahami Waktu] Blok ini SELALU menyertakan tanggal & jam
+ * presisi WIB (getPreciseTimeString(), lihat contextEnricher.js) terlepas
+ * dari ada/tidaknya contextHints — karena semua chat/interaksi natural
+ * (askAISegmented) melewati fungsi ini, ini otomatis mencakup jalur chat
+ * utama DAN pesan proaktif/follow-up botBrain (yang juga memanggil
+ * askAISegmented) tanpa perlu perubahan terpisah di botBrain.js.
+ *
  * @param {object} [contextHints]
  * @param {number} [contextHints.userMessageLength]   - panjang teks pesan user saat ini
  * @param {number} [contextHints.secondsSinceLastMessage] - jeda sejak pesan terakhir di history
  * @param {number} [contextHints.messagesLastFiveMin]  - jumlah pesan (user+bot) dalam 5 menit terakhir
- * @returns {string} blok teks, atau '' jika tidak ada hints
+ * @returns {string} blok teks (minimal berisi baris waktu presisi)
  */
 function buildContextHintsBlock(contextHints) {
-  if (!contextHints) return '';
-
   const lines = ['=== SINYAL KONTEKS ==='];
-  let has = false;
 
-  if (typeof contextHints.userMessageLength === 'number') {
-    lines.push(`Panjang pesan user saat ini: ${contextHints.userMessageLength} karakter`);
-    has = true;
-  }
-  if (typeof contextHints.secondsSinceLastMessage === 'number') {
-    const mins = Math.round(contextHints.secondsSinceLastMessage / 60);
-    lines.push(`Jeda sejak pesan terakhir di percakapan ini: ${mins < 1 ? '<1 menit' : `${mins} menit`}`);
-    has = true;
-  }
-  if (typeof contextHints.messagesLastFiveMin === 'number') {
-    lines.push(`Jumlah pesan (user+bot) dalam 5 menit terakhir: ${contextHints.messagesLastFiveMin} (${contextHints.messagesLastFiveMin >= 4 ? 'chat cepat/beruntun' : 'chat normal/santai'})`);
-    has = true;
+  // Fitur 4: konteks waktu presisi — selalu disertakan, bukan opsional
+  lines.push(`Tanggal & jam sekarang: ${getPreciseTimeString()}`);
+
+  if (contextHints) {
+    if (typeof contextHints.userMessageLength === 'number') {
+      lines.push(`Panjang pesan user saat ini: ${contextHints.userMessageLength} karakter`);
+    }
+    if (typeof contextHints.secondsSinceLastMessage === 'number') {
+      const mins = Math.round(contextHints.secondsSinceLastMessage / 60);
+      lines.push(`Jeda sejak pesan terakhir di percakapan ini: ${mins < 1 ? '<1 menit' : `${mins} menit`}`);
+    }
+    if (typeof contextHints.messagesLastFiveMin === 'number') {
+      lines.push(`Jumlah pesan (user+bot) dalam 5 menit terakhir: ${contextHints.messagesLastFiveMin} (${contextHints.messagesLastFiveMin >= 4 ? 'chat cepat/beruntun' : 'chat normal/santai'})`);
+    }
   }
 
-  return has ? lines.join('\n') : '';
+  return lines.join('\n');
 }
 
 /**

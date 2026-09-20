@@ -2,7 +2,7 @@
 import logger from '../../utils/logger.js';
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const FINTRACK_BASE = 'http://108.137.15.61:9550';
+const FINTRACK_BASE = 'http://16.79.2.204:9550';
 const FINTRACK_KEY  = 'fintrack-ext-key'; // ganti sesuai API key kamu
 
 // ─── HELPER ──────────────────────────────────────────────────────────────────
@@ -84,6 +84,26 @@ export default {
 
   handler: async ({ params, sender, reply }) => {
     const { action } = params;
+
+    // [Fix myFinance "params: {}"] Guard eksplisit untuk kasus action
+    // hilang sama sekali (bukan sekadar di luar enum) — bisa terjadi jika
+    // model mengembalikan SEBAGIAN params (mis. cuma { amount: 20000 })
+    // tanpa field `action`. triggeredPluginHandler.js sudah menyaring kasus
+    // params BENAR-BENAR kosong {} (fallback ke AI chat), tapi kasus ini
+    // (params ada isinya tapi action-nya sendiri kosong) baru ketahuan di
+    // sini — beri pesan yang lebih actionable daripada "Aksi tidak dikenali"
+    // generik, dan log params mentah untuk diagnosa.
+    if (!action) {
+      logger.warn({ intent: 'myFinance', params }, '⚠️ myFinance: dipanggil tanpa field action sama sekali');
+      await reply(
+        '⚠️ Tidak bisa mendeteksi jenis aksi keuangan dari pesanmu.\n' +
+        'Coba lebih spesifik, misal:\n' +
+        '• "catat pengeluaran 20000 buat kopi"\n' +
+        '• "lihat laporan keuangan bulan ini"\n' +
+        '• "tambah anggaran makan 500rb"'
+      );
+      return;
+    }
 
     try {
       // ── confirmDelete ──────────────────────────────────────────────────────
@@ -488,6 +508,13 @@ export default {
       }
 
       // ── unknown action ─────────────────────────────────────────────────────
+      // ── unknown action ──────────────────────────────────────────────
+      // [Fix Bug 2 & 3] Log action mentah + full params saat model (browser-
+      // automation scraper Qwen, bukan function-calling API tervalidasi —
+      // `enum` di schema TIDAK dijamin server) mengembalikan value di luar
+      // enum yang diharapkan. Sebelumnya tidak ada logging di sini, sehingga
+      // sulit diagnosa apakah ini murni salah model atau drift enum.
+      logger.warn({ intent: 'myFinance', action, params }, '⚠️ myFinance: action tidak dikenali/di luar enum');
       await reply('⚠️ Aksi tidak dikenali. Coba ulangi dengan kalimat yang lebih jelas.');
 
     } catch (err) {

@@ -57,6 +57,17 @@ const config = {
 
   // ─── Auth Baileys ─────────────────────────────────────────────────────────
   authDir: './auth/session',
+
+  // ─── [Fitur 3 · Konteks dari URL Instagram/TikTok] ─────────────────────
+  // Path ke file cookies (format Netscape, hasil export dari browser) akun
+  // IG/TikTok milik OWNER SENDIRI — dipakai oleh yt-dlp untuk akses konten
+  // privat. Kosongkan jika hanya perlu akses konten publik.
+  // ⚠️ File cookies WAJIB di luar repo git & permission dibatasi (kredensial
+  // sensitif — lihat services/socialMediaService.js untuk detail risiko).
+  socialMedia: {
+    instagramCookiesPath: process.env.IG_COOKIES_PATH || null,
+    tiktokCookiesPath: process.env.TIKTOK_COOKIES_PATH || null,
+  },
 };
 
 export default config;

@@ -1,5 +1,6 @@
 // plugins/ai.js
-import { askAI, resetSession } from '../services/aiService.js';
+import { askAI } from '../services/aiService.js';
+import { getPersona } from '../services/personaService.js';
 import config from '../config/config.js';
 
 const plugin = {
@@ -14,7 +15,10 @@ const plugin = {
       return;
     }
 
-    const systemPrompt = owner ? config.ownerPersona : config.regularPersona;
+    // Bug fix: config.ownerPersona/regularPersona sudah tidak ada sejak
+    // migrasi persona ke config/persona.json (personaService) — pakai
+    // sumber yang sama dengan alur chat biasa agar konsisten.
+    const { prompt: systemPrompt } = getPersona(sender, owner);
     const aiReply = await askAI({ jid: sender, userText: fullArgs, systemPrompt });
     await reply(aiReply);
   },
