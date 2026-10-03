@@ -5,6 +5,52 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [6.5.0] — 2026-10-04
+
+Swap backend AI menyeluruh sesuai revisi API_USAGE.md PAF-Model terbaru (yang memperkenalkan backend ketiga **Grok**): semua chat/interaksi natural dengan user pindah dari DeepSeek ke **Qwen**, intent detection & task background berbasis tool-calling pindah dari Qwen ke **DeepSeek**, dan plugin economicNews kini memakai **Grok** (akses real-time X/Twitter) lewat pipeline riset → validasi dua langkah.
+
+### Changed — Swap Backend
+
+- **`config/config.js`** — wiring model baru di `config.ai`:
+  - `chatModel` → default **`qwen`** (chat natural user-facing; env `AI_CHAT_MODEL`).
+  - `taskModel` → default **`deepseek`** (task background tool-calling: botBrain, memoryService, approval; env `AI_TASK_MODEL`).
+  - `intentModel` (BARU) → default **`deepseek`** (intent detection di intentSessionService; env `AI_INTENT_MODEL`).
+  - `newsModel` (BARU) → default **`grok`** (plugin economicNews; env `AI_NEWS_MODEL`).
+  - Regex gateway di komentar diperbarui: `^(deepseek|qwen|grok)(?:\(([^)]+)\))?$`.
+  - Vision & media generation TIDAK lewat config — hardcoded `'qwen'` di aiService karena kemampuan eksklusif Qwen (DeepSeek butuh `model_tab: "vision"` khusus).
+- **`services/aiService.js`** —
+  - `resolveBackend()` kini mengenali backend ketiga `grok` (sebelumnya `"grok"` salah terdeteksi sebagai deepseek).
+  - `sendRequest()` — resolusi `think_mode` per-backend yang baru: Qwen dipaksa `'thinking'` HANYA untuk task berat (task_type khusus, attachment, tool-calling); chat natural polos memakai `thinkMode` dari caller (default `'auto'`) agar balasan cepat & responsif. DeepSeek memakai `thinkMode` apa adanya. Grok TIDAK pernah menerima `think_mode` (chat-only v1 — diabaikan diam-diam oleh gateway, §7).
+  - `askAI()`/`askAISegmented()` — pesan ber-gambar selalu dirouting ke `'qwen'` (vision), bukan lagi `config.ai.taskModel`.
+  - `describeImage()`/`describeDocument()`/`describeSocialMedia()` — model di-hardcode `'qwen'` (vision & pemahaman dokumen selalu Qwen).
+  - `generateImage()`/`generateVideo()`/`webSearch()` — default model di-hardcode `'qwen'` (task_type adalah fitur Qwen-only).
+  - Format pesan Qwen/Grok: system prompt difold ke content (`INSTRUCTION: "..." INPUT: "..."`) — Grok v1 juga tidak menerima field system prompt terpisah (§5.2: DeepSeek only).
+- **`services/Intentsessionservice.js`** — intent detection pindah ke DeepSeek (`config.ai.intentModel`):
+  - `initIntentSession()` — system prompt kini dikirim sebagai message ber-role `system` (format DeepSeek, §5.2), bukan digabung ke content ala Qwen.
+  - `think_mode: 'thinking'` eksplisit di init & detect (keputusan produk: intent lebih teliti dengan expert+DeepThink).
+  - `tool_choice: 'auto'` dipertahankan (bermakna untuk Qwen; DeepSeek mengabaikannya — harmless).
+  - Komentar 404 diperbarui: gateway tetap tidak mengembalikan 404 untuk session expired di DeepSeek/Qwen; 404 hanya untuk Grok CONTINUE tanpa `conversation_url` (tidak relevan di sini). Logika auto-reinit untuk error apapun tidak berubah.
+- **`services/personaService.js`** — komentar header diperbarui: model AI tidak ditentukan per-persona; chat natural pakai `chatModel` (kini Qwen), intent/task background pakai `taskModel`/`intentModel` (kini DeepSeek), economicNews pakai `newsModel` (Grok).
+- **`services/botBrain.js`** — komentar header diperbarui (keputusan holistik kini via taskModel/DeepSeek).
+
+### Added — Grok untuk economicNews
+
+- **`services/aiService.js`** — dua fungsi baru:
+  - `extractJsonBlock(raw)` — parser tahan banting untuk output JSON model: buang code fence, ambil blok `{...}` terluar (first `{` .. last `}`), lalu `JSON.parse`. Return `null` jika tidak ada JSON valid.
+  - `askAIJson({ jid, userText, systemPrompt, model, maxAttempts })` — minta model membalas HANYA satu objek JSON valid lalu parse di client. Untuk backend TANPA function-calling: Grok v1 menerima `tools` tanpa error tapi tidak pernah mengeksekusinya (§9). Retry internal (default 2x) dengan peringatan format yang makin tegas di percobaan berikutnya; selalu session baru (`forceNew`) agar output rusak tidak mengkontaminasi percobaan berikutnya. Default model `config.ai.newsModel` (`grok`).
+- **`plugins/scheduled/economicNews.js`** — pipeline dua langkah:
+  1. **Grok** (`config.ai.newsModel`) riset berita dengan akses real-time X/Twitter bawaannya → output JSON murni via `askAIJson()` (instruksi `GROK_RESEARCH_INSTRUCTIONS` — skema JSON lengkap: datetime/global/economicCalendar/indonesia).
+  2. **Qwen** (`config.ai.taskModel`) memvalidasi & menstrukturkan hasil riset via tool-calling `report_economic_update` — skema tool lama dipertahankan; Qwen mengoreksi/melengkapi field yang kurang (mis. `sourceUrl` hilang) dan bentuk akhirnya dijamin gateway, bukan regex.
+  - Instruksi konten berita diekstrak ke konstanta bersama `NEWS_CONTENT_RULES` (dipakai kedua langkah); `NEWS_INSTRUCTIONS` (varian Qwen + perintah panggil fungsi) dan `GROK_RESEARCH_INSTRUCTIONS` (varian Grok + format JSON ketat) diturunkan darinya.
+  - Gagal langkah 1 (JSON tidak valid setelah retry) → skip siklus dengan log jelas, tidak crash.
+
+### Changed — Error Mapping & Status (adaptasi API_USAGE.md baru)
+
+- **`services/aiService.js`** (`askAI()`) — pemetaan error baru sesuai §12: `429` (rate limit/usage cap, semua backend) → "⏳ AI sedang kena rate limit, coba lagi beberapa saat.", `401` (Grok: sesi worker tidak valid, SSO-only) → "🔐 Sesi AI tidak valid (perlu login ulang di worker), coba lagi nanti.", `404` (Grok CONTINUE tanpa conversation_url) → "🔄 Sesi AI tidak ditemukan, coba kirim pesanmu sekali lagi.".
+- **`plugins/agent.js`** (`!agent status`) — kini menampilkan 4 model: Chat/Task/Intent/News.
+
+---
+
 ## [6.4.3] — 2026-09-18
 
 Fix root cause SEBENARNYA dari bug `myFinance "params: {}"` (lanjutan

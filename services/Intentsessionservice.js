@@ -3,11 +3,11 @@
 //
 // Skenario:
 //   Bot start → initIntentSession() dipanggil → build daftar tools dari
-//   triggered plugins → kirim ke Qwen (config.ai.taskModel) dengan `tools`
-//   (function-calling, lihat API_USAGE.md §9) → Qwen buat session baru →
+//   triggered plugins → kirim ke DeepSeek (config.ai.intentModel) dengan
+//   `tools` (function-calling, lihat API_USAGE.md §9) → DeepSeek buat session baru →
 //   simpan X-Session-ID sebagai "intent session"
 //   Setiap pesan masuk dari owner/user → kirim ke session ini dengan
-//   X-Session-ID + `tools` yang sama → Qwen punya konteks percakapan
+//   X-Session-ID + `tools` yang sama → model intent punya konteks percakapan
 //   lengkap saat mendeteksi intent, dan MEMANGGIL tool yang sesuai jika
 //   ada aksi nyata (bukan lagi menulis raw JSON bebas di teks).
 //
@@ -23,13 +23,17 @@
 //   tidak perlu regex/JSON.parse manual atas teks bebas lagi. Jika tidak
 //   ada aksi yang perlu dilakukan, Qwen cukup TIDAK memanggil tool apapun.
 //
-// Satu intent session per sender JID. Selalu pakai Qwen — intent detection
-// bukan chat user-facing, jadi masuk kategori "tugas lain".
+// Satu intent session per sender JID. Selalu pakai DeepSeek
+// (config.ai.intentModel) — sejak swap backend, chat natural pindah ke Qwen
+// sementara task tool-calling (intent detection, botBrain, memory) pindah
+// ke DeepSeek.
 //
 // Catatan migrasi PAF-Model: gateway TIDAK mengembalikan 404 khusus untuk
-// session expired (lihat API_USAGE.md §12) — error yang mungkin muncul
-// adalah 400/422/500/502/504. Reinit dilakukan untuk error apapun, bukan
-// hanya 404. Juga: sesi TIDAK punya TTL otomatis lagi (§6.2.1) — tapi
+// session expired di DeepSeek/Qwen (lihat API_USAGE.md §12) — error yang
+// mungkin muncul adalah 400/422/500/502/504 (404 hanya untuk Grok CONTINUE
+// tanpa conversation_url — tidak relevan di sini). Reinit dilakukan untuk
+// error apapun, bukan hanya 404. Juga: sesi TIDAK punya TTL otomatis lagi
+// (§6.2.1) — tapi
 // intent session ini kita anggap "seumur proses bot" (di-reinit hanya saat
 // error), bukan dikelola lewat sessionStore/config.sessionTtl seperti sesi
 // chat biasa.
@@ -57,7 +61,7 @@ let _cachedSystemPrompt = null;
 let _cachedTools = null;
 
 // ─── Base system prompt ──────────────────────────────────────────────────
-// Mendefinisikan PERAN Qwen dalam session ini: pantau pesan, panggil tool
+// Mendefinisikan PERAN model intent (DeepSeek) dalam session ini: pantau pesan, panggil tool
 // yang sesuai jika ada aksi nyata, atau tidak melakukan apapun jika tidak.
 // ⚠️ PENTING: JANGAN gunakan kata "tool"/"tools" di teks manapun yang dikirim
 // ke Qwen/DeepSeek (system prompt, intentDefinition, dsb) — kata itu memicu
@@ -109,8 +113,8 @@ export function resetSystemPromptCache() {
 // ─── Init: buat intent session untuk satu sender ────────────────────────
 /**
  * Inisialisasi intent session untuk sender tertentu.
- * Build tools + system prompt terlebih dahulu, lalu kirim ke Qwen sebagai
- * pesan pertama → simpan session ID.
+ * Build tools + system prompt terlebih dahulu, lalu kirim ke DeepSeek
+ * sebagai pesan pertama → simpan session ID.
  *
  * @param {string} senderJid
  * @returns {Promise<string|null>} sessionId atau null jika gagal
@@ -121,15 +125,20 @@ export async function initIntentSession(senderJid) {
 
     const { systemPrompt, tools } = await _buildToolsAndPrompt();
 
+    // DeepSeek membaca system prompt dari role "system" (§5.2 API_USAGE.md) —
+    // dikirim di pesan init; sesi browser menyimpan konteksnya untuk turn
+    // berikutnya. (Pola Qwen lama menggabungkan prompt ke content karena
+    // Qwen tidak menerima field system prompt terpisah.)
     const res = await client.post('/v1/chat/completions', {
-      model: config.ai.taskModel,
+      model: config.ai.intentModel,
       messages: [
-        { role: 'user', content: `${systemPrompt} Pesan pertama untuk inisialisasi: "halo"` },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: 'Pesan pertama untuk inisialisasi: "halo"' },
       ],
       tools,
-      tool_choice: 'auto',
+      tool_choice: 'auto', // bermakna untuk Qwen; DeepSeek mengabaikannya — harmless
       stream: false,
-      think_mode: 'thinking', // semua panggilan backend Qwen dipaksa thinking (lihat sendRequest di aiService.js)
+      think_mode: 'thinking', // keputusan produk: intent di DeepSeek pakai expert+DeepThink (lebih teliti)
     });
 
     const sessionId =
@@ -207,12 +216,12 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
     const timeContext = `[Konteks waktu sekarang: ${getPreciseTimeString()}]`;
 
     const body = {
-      model: config.ai.taskModel,
+      model: config.ai.intentModel,
       messages: [{ role: 'user', content: `${timeContext}\n${text}` }],
       tools,
-      tool_choice: 'auto',
+      tool_choice: 'auto', // bermakna untuk Qwen; DeepSeek mengabaikannya — harmless
       stream: false,
-      think_mode: 'thinking', // semua panggilan backend Qwen dipaksa thinking
+      think_mode: 'thinking', // konsisten dengan initIntentSession (expert+DeepThink)
     };
 
     // Sertakan attachment gambar jika ada
@@ -250,9 +259,10 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
   } catch (err) {
     const status = err.response?.status;
 
-    // PAF-Model gateway tidak punya kode error khusus untuk "session expired"
-    // (lihat API_USAGE.md §12: hanya 400/422/500/502/504). Jadi untuk error
-    // apapun yang bukan retry, kita coba reinit sekali sebagai fallback.
+    // Gateway tidak punya kode error khusus "session expired" untuk
+    // DeepSeek/Qwen (API_USAGE.md §12: hanya 400/422/500/502/504 — 404 hanya
+    // untuk Grok CONTINUE tanpa conversation_url, tidak relevan di sini).
+    // Jadi untuk error apapun, kita coba reinit sekali sebagai fallback.
     if (!isRetry) {
       logger.warn({ senderJid, status, err: err.message }, '⚠️ Intent session error, coba reinit sekali...');
       _store.delete(senderJid);

@@ -15,13 +15,13 @@
 //     "default": "prompt string..."
 //     "users":   { "628xxx": "prompt string..." }
 //
-// ⚠️ Sejak migrasi ke PAF-Model gateway (DeepSeek + Qwen), model AI TIDAK
-// lagi ditentukan per-persona. Semua chat/interaksi natural selalu pakai
-// config.ai.chatModel (deepseek), dan semua tugas lain (intent detection,
-// deskripsi/generate gambar, generate video, web search) selalu pakai
-// config.ai.taskModel (qwen). Field "model" di persona.json yang lama
-// (kalau masih ada) diabaikan oleh aiService — biarkan saja, tidak perlu
-// dihapus manual dari file.
+// ⚠️ Sejak migrasi ke PAF-Model gateway (DeepSeek + Qwen + Grok), model AI
+// TIDAK lagi ditentukan per-persona. Semua chat/interaksi natural selalu
+// pakai config.ai.chatModel (kini Qwen), intent detection & task background
+// pakai config.ai.taskModel/intentModel (kini DeepSeek), dan plugin
+// economicNews pakai config.ai.newsModel (Grok). Field "model" di
+// persona.json yang lama (kalau masih ada) diabaikan oleh aiService —
+// biarkan saja, tidak perlu dihapus manual dari file.
 //
 // getPersona()      → { prompt: string, model: string|null }  (model hanya informasional)
 // getPersonaPrompt()→ string (untuk backward compat)

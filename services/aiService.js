@@ -1,12 +1,17 @@
 // services/aiService.js
 // ─────────────────────────────────────────────────────────────────────────
 // Integrasi ke PAF-Model gateway (lihat API_USAGE.md di FiePaw/PAF-Model).
-// Gateway ini fronting DUA backend browser-automation:
-//   - deepseek → dipakai untuk semua CHAT/interaksi natural dengan user
-//   - qwen     → dipakai untuk SEMUA tugas lain: intent detection, deskripsi
-//                gambar, generate gambar/video, web search, dan pesan chat
+// Gateway ini fronting TIGA backend browser-automation:
+//   - qwen     → dipakai untuk semua CHAT/interaksi natural dengan user,
+//                plus semua tugas vision/media: deskripsi gambar/dokumen/
+//                video, generate gambar/video, web search, dan pesan chat
 //                yang mengandung gambar (DeepSeek butuh model_tab "vision"
 //                khusus, Qwen tidak perlu apa-apa untuk terima gambar)
+//   - deepseek → dipakai untuk intent detection & task background berbasis
+//                tool-calling (botBrain, memoryService, approval, dll)
+//   - grok     → chat-only v1: tanpa tools/task_type/think_mode (lihat
+//                API_USAGE.md §7/§9/§14). Dipakai plugin economicNews via
+//                askAIJson() — pola raw-JSON + parser tahan banting.
 //
 // ─── Perubahan penting per revisi API_USAGE.md terbaru ───────────────────
 //   1. Sesi TIDAK PUNYA TTL otomatis di server lagi (§6.2.1) — sesi hidup
@@ -59,10 +64,12 @@ const client = axios.create({
  * ("deepseek(account1)", "qwen(account1.json)").
  *
  * @param {string} model
- * @returns {'deepseek'|'qwen'}
+ * @returns {'deepseek'|'qwen'|'grok'}
  */
 function resolveBackend(model) {
-  return model?.startsWith('qwen') ? 'qwen' : 'deepseek';
+  if (model?.startsWith('qwen')) return 'qwen';
+  if (model?.startsWith('grok')) return 'grok';
+  return 'deepseek';
 }
 
 /**
@@ -148,8 +155,10 @@ async function sendRequest({
     }
     messages.push({ role: 'user', content: userText });
   } else {
-    // Qwen: tidak baca system message dari array messages — tetap pakai
-    // trik lama (gabung ke content seperti API lama).
+    // Qwen/Grok: tidak baca system message dari array messages — tetap pakai
+    // trik lama (gabung ke content seperti API lama). Grok v1 juga tidak
+    // menerima field system prompt terpisah (§5.2: DeepSeek only), jadi
+    // fold ke content adalah satu-satunya cara persona sampai ke Grok.
     const content = isFirstMessage
       ? (normalizedPrompt ? `INSTRUCTION: "${normalizedPrompt}" INPUT: "${userText}"` : `INPUT: "${userText}"`)
       : `INPUT: "${userText}"`;
@@ -176,15 +185,25 @@ async function sendRequest({
   }
 
   // think_mode — opsional, arti beda per backend (lihat §7 API_USAGE.md).
-  // ⚠️ Keputusan produk: SELURUH request ke backend Qwen dipaksa 'thinking'
-  // (deep reasoning), terlepas dari nilai thinkMode yang diminta caller —
-  // dipusatkan di sini agar berlaku otomatis ke SEMUA titik panggilan Qwen
-  // (askAI/askAISegmented/askAITool/generateImage/generateVideo/webSearch/
-  // describeImage/intentSessionService/botBrain/memoryService/economicNews)
-  // tanpa perlu mengubah setiap call site satu-satu. DeepSeek tidak terdampak
-  // — tetap memakai thinkMode apa adanya (default 'auto' dari pemanggil).
-  const resolvedThinkMode = backend === 'qwen' ? 'thinking' : thinkMode;
-  if (resolvedThinkMode) {
+  // ⚠️ Keputusan produk (revisi swap backend):
+  //   - Qwen: task berat — task_type khusus (create_image/create_video/
+  //     web_search), attachment (vision/dokumen/video), dan tool-calling —
+  //     tetap dipaksa 'thinking' (deep reasoning). Chat natural polos pakai
+  //     thinkMode dari caller (default 'auto') agar balasan cepat & responsif.
+  //   - DeepSeek: memakai thinkMode apa adanya (intent detection di
+  //     intentSessionService mengirim 'thinking' secara eksplisit).
+  //   - Grok: think_mode TIDAK didukung di v1 — diabaikan diam-diam oleh
+  //     gateway (§7), jadi jangan pernah dikirim.
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  const hasTools = Array.isArray(tools) && tools.length > 0;
+  let resolvedThinkMode;
+  if (backend === 'qwen') {
+    const isHeavyTask = isSpecialTask || hasAttachments || hasTools;
+    resolvedThinkMode = isHeavyTask ? 'thinking' : (thinkMode || 'auto');
+  } else {
+    resolvedThinkMode = thinkMode;
+  }
+  if (backend !== 'grok' && resolvedThinkMode) {
     body.think_mode = resolvedThinkMode;
   }
 
@@ -265,11 +284,10 @@ async function sendRequest({
  * Kirim pesan chat ke AI.
  *
  * Model dipilih otomatis, kecuali eksplisit di-override lewat parameter `model`:
- *   - `model` diisi eksplisit      → pakai itu (mis. task background yang
- *     sengaja butuh Qwen walau tidak ada gambar, seperti scheduled plugin)
- *   - Ada attachments (gambar)     → config.ai.taskModel (qwen) — DeepSeek
- *     butuh mode vision khusus, Qwen tidak perlu apa-apa
- *   - Tidak ada attachments/model  → config.ai.chatModel (deepseek)
+ *   - `model` diisi eksplisit      → pakai itu
+ *   - Ada attachments (gambar)     → 'qwen' (vision) — hardcoded, kemampuan
+ *     vision eksklusif Qwen terlepas dari config
+ *   - Tidak ada attachments/model  → config.ai.chatModel (kini Qwen)
  *
  * @param {object} options
  * @param {string}  options.jid
@@ -285,7 +303,9 @@ async function sendRequest({
  */
 export async function askAI({ jid, userText, systemPrompt, thinkMode, attachments, model: modelOverride, memoryJid, useMemory, forceNew }) {
   const hasImage = Array.isArray(attachments) && attachments.length > 0;
-  const model = modelOverride || (hasImage ? config.ai.taskModel : config.ai.chatModel);
+  // Gambar selalu ke Qwen (vision) — taskModel kini DeepSeek, dan DeepSeek
+  // butuh model_tab "vision" khusus untuk lampiran.
+  const model = modelOverride || (hasImage ? 'qwen' : config.ai.chatModel);
 
   try {
     const { text } = await sendRequest({ jid, userText, systemPrompt, thinkMode, attachments, taskType: 'chat', model, memoryJid, useMemory, forceNew });
@@ -298,6 +318,9 @@ export async function askAI({ jid, userText, systemPrompt, thinkMode, attachment
     if (status === 504) return '⏱️ Tidak ada worker AI tersedia saat ini, coba lagi sebentar.';
     if (status === 502) return '⚠️ AI (Qwen) gagal merespons, coba lagi.';
     if (status === 500) return '⚠️ Terjadi kesalahan di server AI, coba lagi.';
+    if (status === 429) return '⏳ AI sedang kena rate limit, coba lagi beberapa saat.';
+    if (status === 401) return '🔐 Sesi AI tidak valid (perlu login ulang di worker), coba lagi nanti.';
+    if (status === 404) return '🔄 Sesi AI tidak ditemukan, coba kirim pesanmu sekali lagi.';
     if (status === 400 || status === 422) return '❌ Permintaan ke AI tidak valid.';
     return '❌ Maaf, AI sedang tidak bisa diakses saat ini.';
   }
@@ -349,6 +372,81 @@ export async function askAITool({ jid, userText, systemPrompt, tools, model, for
   }
 }
 
+// ─── Raw-JSON output (untuk backend tanpa function-calling, mis. Grok) ───
+
+/**
+ * Parser tahan banting untuk output JSON dari model: buang code fence
+ * ```json, ambil blok {...} terluar (first "{" .. last "}"), lalu JSON.parse.
+ * Return null jika tidak ada JSON valid yang bisa diekstrak.
+ *
+ * @param {string} raw
+ * @returns {object|null}
+ */
+function extractJsonBlock(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * [Grok support] Minta model membalas HANYA satu objek JSON valid lalu parse
+ * hasilnya di sisi client. Dipakai untuk backend yang TIDAK mendukung
+ * function-calling — Grok v1 menerima `tools` tanpa error tapi tidak pernah
+ * mengeksekusinya (API_USAGE.md §9) — sehingga satu-satunya cara mendapat
+ * struktur data darinya adalah pola raw-JSON.
+ *
+ * Retry internal: percobaan berikutnya menyertakan peringatan format yang
+ * lebih tegas di akhir prompt. Selalu session baru (forceNew) agar output
+ * rusak dari percobaan sebelumnya tidak mengkontaminasi percobaan berikutnya.
+ * System prompt untuk Grok difold ke content (INSTRUCTION/INPUT) oleh
+ * sendRequest — Grok tidak menerima field system prompt terpisah.
+ *
+ * @param {object} options
+ * @param {string}  options.jid            - id untuk logging/session namespace
+ * @param {string}  options.userText       - instruksi utama
+ * @param {string}  [options.systemPrompt] - instruksi konten & skema JSON
+ * @param {string}  [options.model]        - default config.ai.newsModel ('grok')
+ * @param {number}  [options.maxAttempts]  - default 2
+ * @returns {Promise<object|null>} objek hasil parse, atau null jika semua percobaan gagal
+ */
+export async function askAIJson({ jid, userText, systemPrompt, model, maxAttempts = 2 }) {
+  const resolvedModel = model || config.ai.newsModel || 'grok';
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const formatWarning = attempt > 1
+        ? '\n\nPERINGATAN FORMAT: balasanmu sebelumnya bukan JSON valid. Balas HANYA satu objek JSON valid — tanpa code fence, tanpa teks pembuka/penutup, tanpa komentar. Mulai dari { dan akhiri dengan }.'
+        : '';
+      const { text } = await sendRequest({
+        jid: `${jid}_json_${Date.now()}`,
+        userText: userText + formatWarning,
+        systemPrompt,
+        forceNew: true,
+        taskType: 'chat',
+        model: resolvedModel,
+        useMemory: false,
+      });
+
+      const parsed = extractJsonBlock(text);
+      if (parsed) return parsed;
+
+      logger.warn({ jid, attempt, model: resolvedModel, preview: text?.slice(0, 120) }, '⚠️ askAIJson: output bukan JSON valid');
+    } catch (err) {
+      logger.warn({ jid, attempt, model: resolvedModel, err: err.message }, '⚠️ askAIJson: request gagal');
+    }
+  }
+
+  logger.error({ jid, model: resolvedModel }, `❌ askAIJson: ${maxAttempts}x percobaan gagal menghasilkan JSON valid`);
+  return null;
+}
+
 /**
  * Generate gambar menggunakan Qwen (task_type: create_image, Qwen-only).
  * URL gambar ada di array yang di-return, bukan di teks.
@@ -360,12 +458,12 @@ export async function askAITool({ jid, userText, systemPrompt, tools, model, for
  * @param {object} options
  * @param {string}  options.jid
  * @param {string}  options.prompt        - deskripsi gambar yang ingin dibuat
- * @param {string}  [options.accountModel] - override "qwen(accountX.json)", default config.ai.taskModel
+ * @param {string}  [options.accountModel] - override "qwen(accountX.json)", default 'qwen' (hardcoded)
  * @returns {Promise<{ text: string|null, urls: string[] }>}
  */
 export async function generateImage({ jid, prompt, accountModel }) {
   try {
-    const model = accountModel || config.ai.taskModel;
+    const model = accountModel || 'qwen'; // media generation & web search selalu Qwen (task_type Qwen-only)
     logger.info({ jid, prompt: prompt.slice(0, 60) }, '🖼️ Request generate gambar...');
 
     const res = await client.post(
@@ -401,12 +499,12 @@ export async function generateImage({ jid, prompt, accountModel }) {
  * @param {object} options
  * @param {string}  options.jid
  * @param {string}  options.prompt        - deskripsi video yang ingin dibuat
- * @param {string}  [options.accountModel] - override "qwen(accountX.json)", default config.ai.taskModel
+ * @param {string}  [options.accountModel] - override "qwen(accountX.json)", default 'qwen' (hardcoded)
  * @returns {Promise<{ text: string|null, urls: string[] }>}
  */
 export async function generateVideo({ jid, prompt, accountModel }) {
   try {
-    const model = accountModel || config.ai.taskModel;
+    const model = accountModel || 'qwen'; // media generation & web search selalu Qwen (task_type Qwen-only)
     logger.info({ jid, prompt: prompt.slice(0, 60) }, '🎬 Request generate video...');
 
     const res = await client.post(
@@ -441,12 +539,12 @@ export async function generateVideo({ jid, prompt, accountModel }) {
  * @param {object} options
  * @param {string}  options.jid
  * @param {string}  options.query         - query pencarian
- * @param {string}  [options.accountModel] - override "qwen(accountX.json)", default config.ai.taskModel
+ * @param {string}  [options.accountModel] - override "qwen(accountX.json)", default 'qwen' (hardcoded)
  * @returns {Promise<string>} hasil pencarian sebagai teks
  */
 export async function webSearch({ jid, query, accountModel }) {
   try {
-    const model = accountModel || config.ai.taskModel;
+    const model = accountModel || 'qwen'; // media generation & web search selalu Qwen (task_type Qwen-only)
     logger.info({ jid, query: query.slice(0, 60) }, '🔍 Request web search...');
 
     const res = await client.post(
@@ -480,7 +578,7 @@ export async function webSearch({ jid, query, accountModel }) {
  * Bentuk id sesuai PAF-Model: "deepseek", "qwen", atau bentuk ber-akun
  * seperti "deepseek(account1)" / "qwen(account1.json)".
  *
- * @returns {Promise<string[]>} array id model, misal ['deepseek', 'qwen', 'deepseek(account1)']
+ * @returns {Promise<string[]>} array id model, misal ['deepseek', 'qwen', 'grok', 'deepseek(account1)']
  */
 export async function listModels() {
   try {
@@ -527,7 +625,7 @@ Tulis deskripsi dalam Bahasa Indonesia, padat dan informatif (2-4 kalimat).`;
       attachments,
       forceNew: true,
       taskType: 'chat',
-      model: config.ai.taskModel,
+      model: 'qwen', // vision & pemahaman dokumen selalu Qwen — taskModel kini DeepSeek
       useMemory: false,
     });
 
@@ -583,7 +681,7 @@ Tulis ringkasan dalam Bahasa Indonesia, padat dan informatif (3-6 kalimat sesuai
       attachments,
       forceNew: true,
       taskType: 'chat',
-      model: config.ai.taskModel,
+      model: 'qwen', // vision & pemahaman dokumen selalu Qwen — taskModel kini DeepSeek
       useMemory: false,
     });
 
@@ -631,7 +729,7 @@ Tulis ringkasan dalam Bahasa Indonesia, padat dan informatif (2-4 kalimat).`;
       attachments,
       forceNew: true,
       taskType: 'chat',
-      model: config.ai.taskModel,
+      model: 'qwen', // vision & pemahaman dokumen selalu Qwen — taskModel kini DeepSeek
       useMemory: false,
     });
 
@@ -824,7 +922,9 @@ function buildContextHintsBlock(contextHints) {
  */
 export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, attachments, model: modelOverride, memoryJid, useMemory, contextHints }) {
   const hasImage = Array.isArray(attachments) && attachments.length > 0;
-  const model = modelOverride || (hasImage ? config.ai.taskModel : config.ai.chatModel);
+  // Gambar selalu ke Qwen (vision) — taskModel kini DeepSeek, dan DeepSeek
+  // butuh model_tab "vision" khusus untuk lampiran.
+  const model = modelOverride || (hasImage ? 'qwen' : config.ai.chatModel);
 
   // Fix #2: sinyal konteks numerik (panjang pesan, jeda, kecepatan chat) —
   // diselipkan SETELAH instruksi format, SEBELUM persona, supaya AI punya
@@ -873,7 +973,7 @@ export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, a
  * Session ID tersimpan ke sessionStore sehingga percakapan pertama owner
  * langsung dalam mode "continue" (persona sudah di-set di server).
  *
- * Selalu pakai config.ai.chatModel (deepseek) — warmup ini untuk chat biasa.
+ * Selalu pakai config.ai.chatModel (kini Qwen) — warmup ini untuk chat biasa.
  * useMemory: true (default) — warmup adalah titik terbaik untuk mengisi
  * ulang konteks dari sesi-sesi sebelumnya begitu bot baru menyala.
  *

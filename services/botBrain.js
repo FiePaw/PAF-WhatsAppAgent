@@ -4,14 +4,14 @@
 //
 // Satu otak, satu keputusan per JID per siklus:
 //   1. Kumpulkan semua data (history, profil, follow-up, presence, waktu)
-//   2. Kirim ke Qwen SEKALI → Qwen return keputusan holistik
+//   2. Kirim ke taskModel (kini DeepSeek) SEKALI → return keputusan holistik
 //   3. BotBrain eksekusi keputusan
 //
 // Anti-spam berlapis:
 //   - Read receipt: jika pesan terakhir bot belum dibaca < 24 jam → skip proactive
 //   - Follow-up: bypass read-check (sudah dijanjikan ke user)
 //   - Satu pesan per siklus per JID
-//   - nextAnalyzeIn: Qwen tentukan kapan cek lagi (max 1 jam)
+//   - nextAnalyzeIn: model tentukan kapan cek lagi (max 1 jam)
 //
 // Profil user diperbarui setiap 1 jam (siklus hourly terpisah di dalam botBrain).
 //
@@ -534,7 +534,7 @@ async function thinkAndActForJid(jid) {
 
   let decision;
   try {
-    // Keputusan holistik di background → Qwen (config.ai.taskModel), via
+    // Keputusan holistik di background → taskModel (kini DeepSeek), via
     // tool-calling (§9 API_USAGE.md) — menggantikan pola lama raw-JSON.
     const result = await askAITool({
       jid: `brain_${jid}`,
