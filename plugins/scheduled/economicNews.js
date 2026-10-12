@@ -260,7 +260,7 @@ export default {
   crons: [
     {
       name: 'scheduled:economicNews',
-      expr: '@every_4h',
+      expr: '@every_6h',
       handler: sendEconomicNews,
       runOnStart: false,
     },

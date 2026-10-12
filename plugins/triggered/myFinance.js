@@ -212,7 +212,7 @@ async function sendEconomicNews() {
       systemPrompt: NEWS_INSTRUCTIONS,
       tools: [economicNewsTool],
       thinkMode: 'thinking',
-      model: config.ai.taskModel,
+      model: config.ai.newsModel,
     });
   } catch (err) {
     logger.error({ err: err.message }, '❌ Gagal menstrukturkan berita dari hasil riset Grok');
@@ -230,7 +230,7 @@ async function sendEconomicNews() {
         systemPrompt: NEWS_INSTRUCTIONS,
         tools: [economicNewsTool],
         thinkMode: 'thinking',
-        model: config.ai.taskModel,
+        model: config.ai.newsModel,
       });
     } catch (err) {
       logger.error({ err: err.message }, '❌ Gagal ambil berita ekonomi dari AI (retry)');
