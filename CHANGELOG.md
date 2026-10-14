@@ -5,6 +5,155 @@ Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [6.6.1] — 2026-10-14
+
+Fix bug **BotBrain menjawab dirinya sendiri**: pesan proaktif yang sudah ditulis
+model keputusan justru dibalas lagi oleh model chat, sehingga yang sampai ke user
+adalah "jawaban atas pesan bot sendiri", bukan pesan aslinya.
+
+### Fixed — BotBrain Menjawab Dirinya Sendiri
+
+- **Gejala**: pesan proaktif BotBrain terasa tidak nyambung / seperti bot
+  membalas ucapannya sendiri, bukan menyapa user.
+- **Root cause**: di `thinkAndActForJid()` (`services/botBrain.js`),
+  `decision.message` (pesan final dari tool `make_decision`) dikirim lagi ke
+  `askAISegmented({ jid, userText: decision.message })`. Di `sendRequest()`,
+  `userText` selalu menjadi turn `role: 'user'`, jadi model menganggap pesan
+  buatan bot itu sebagai ucapan user lalu **membalasnya** — balasan itulah yang
+  terkirim ke WhatsApp. Efek samping: session chat user tercemar turn palsu
+  (user: pesan bot → assistant: balasan), memicu pronoun/konteks salah saat user
+  membalas.
+- **Fix (Opsi A)**: tidak ada lagi panggilan AI kedua. `decision.message`
+  dipecah lokal lewat `parseSegments()` (pemisah `###` opsional) dan dikirim
+  apa adanya dengan efek mengetik natural (`replySegmented`).
+  - Prompt keputusan & deskripsi field `message` diperjelas: isi pesan final
+    ke user, bukan balasan atas pesan lain; boleh dipecah jadi beberapa bubble
+    dengan `###`.
+
+### Fixed — Efek Samping Terkait di Jalur Pesan Proaktif
+
+- **Pesan proaktif tidak tercatat di chatHistory**: `botBrain.js` tidak pernah
+  memanggil `recordMessage()`, sehingga siklus berikutnya tidak tahu bot sudah
+  mengirim sesuatu (risiko mengulang topik yang sama). Kini dicatat sebagai
+  `role: 'bot'`, sama seperti jalur balasan di `messageHandler`.
+- **`lastSentAt` tidak pernah tersimpan**: penyimpanan state dikunci
+  `if (sentMsgId)`, padahal `sentMsgId` selalu `null` di jalur segmented —
+  akibatnya `checkReadStatus()` (anti-spam read receipt) tidak pernah aktif.
+  Kini berdasarkan `sendStatus === 'sent'`.
+- **Read receipt kini benar-benar bisa terlacak**: `replySegmented()`
+  (`utils/delay.js`) sekarang mengembalikan ID pesan terakhir yang terkirim
+  (`string|null`), disimpan ke `lastSentMsgId` agar `handleReceiptUpdate()`
+  bisa mencocokkan receipt. Pemanggil lain (`messageHandler`, `statusService`)
+  mengabaikan return value sehingga tidak terpengaruh.
+- **Balasan user dianggap "sudah dibaca"**: `checkReadStatus()` menerima
+  `history` dan tidak lagi memblokir proactive jika user sudah membalas setelah
+  pesan terakhir bot — mencegah bot terblokir 24 jam padahal user aktif tetapi
+  centang biru dimatikan.
+- **Session AI tetap tahu pesan proaktif yang terkirim**: karena pesan tidak
+  lagi lewat model chat, laporan BotBrain ke session (`Pesan dikirim: "..."`)
+  kini **wajib** diinject saat pesan benar-benar terkirim; guard laporan
+  tidak lengkap dan dedupe `reason` hanya berlaku untuk siklus tanpa pesan
+  terkirim. Field `Ringkasan`/`Alasan` yang kosong dilewati, tidak lagi tampil
+  sebagai `undefined`.
+
+### Changed
+
+- **`services/aiService.js`** — `parseSegments()` kini di-`export` agar jalur
+  yang sudah punya teks final dapat memecah segmen tanpa memanggil model.
+- **`utils/delay.js`** — `replySegmented()` mengembalikan `Promise<string|null>`
+  (ID pesan terakhir) alih-alih `Promise<void>`.
+- **`services/botBrain.js`** — import `recordMessage` & `parseSegments`;
+  `askAISegmented` tetap dipakai oleh `sendSingleFollowUp` (jalur follow-up
+  sudah benar: memakai prompt instruksi dengan session terpisah + `forceNew`).
+
+---
+
+## [6.6.0] — 2026-10-12
+
+Fitur baru: **MyCalendar** — integrasi jadwal pribadi owner (kuliah, acara/rapat,
+dan rilis berita ekonomi USD high impact) lewat command, bahasa natural, dan
+pengingat otomatis. Data jadwal disimpan di server **MyCalendar** terpisah; bot
+hanya bertindak sebagai klien HTTP (`/ext/*`). Seluruh fitur **owner-only**.
+
+### Added — Integrasi MyCalendar
+
+- **`services/calendarClient.js`** — klien HTTP ke MyCalendar:
+  - Env: `CALENDAR_API_URL` (default `http://127.0.0.1:9570`) dan
+    `CALENDAR_API_KEY` (dikirim via header `x-api-key`); dibaca saat dipanggil,
+    bukan saat modul dimuat, sehingga tidak tergantung urutan load `dotenv`.
+  - Timeout 10 detik; error dibungkus `CalendarClientError` (`status`, `code`)
+    dengan pesan ramah untuk timeout/jaringan dan `401` (API key salah).
+  - Endpoint: `getStatus`, `getAgenda`, `getNews`, `refreshNews`,
+    `checkConflicts`, `listEvents`, `createEvent`, `deleteEvent`,
+    `getRemindersDue`, `ackReminders`.
+- **`services/calendarFormat.js`** — util waktu WIB (UTC+7, tanpa DST, tidak
+  bergantung zona waktu mesin) dan format teks WhatsApp: parsing/validasi
+  tanggal & jam, konversi WIB → ISO UTC, label tanggal Indonesia, format agenda
+  per hari (ikon 📚 kuliah / 🗓️ acara / 🇺🇸 berita, penanda ⚠️ bentrok),
+  format baris berita, dan ringkasan peringatan bentrok.
+- **`services/calendarPending.js`** — konfirmasi tertunda per pengirim
+  (in-memory, TTL 5 menit, hilang saat bot restart), dipakai bersama oleh
+  plugin command dan triggered.
+
+### Added — Plugin
+
+- **`plugins/calendar.js`** (command, `ownerOnly`):
+  - `!jadwal [besok|lusa|minggu]` / `!agenda` — tampilkan agenda (hari ini,
+    besok, lusa, atau 7 hari).
+  - `!kuliah` — kuliah hari ini & besok.
+  - `!berita` — rilis USD high impact 7 hari ke depan; `!berita refresh`
+    memicu pengambilan data baru di latar belakang.
+  - `!agenda hapus <id>` — hapus jadwal (id `#xxxxxxxx` tampil di `!jadwal`,
+    minimal 4 karakter; hanya jadwal penting 🗓️) dengan konfirmasi.
+  - `!ya` / `!tidak` — konfirmasi atau batalkan aksi tertunda.
+  - Pesan khusus saat database MyCalendar (PC rumah) offline (`503`).
+- **`plugins/triggered/calendar.js`** (intent bahasa natural, `ownerOnly`):
+  - Menambah acara ("tambah rapat dosen Jumat jam 10") dan menanyakan agenda
+    ("besok ada kuliah apa?", "agenda minggu ini").
+  - Detail tanggal/jam diekstrak lewat panggilan AI terpisah yang diberi waktu
+    sekarang (WIB), karena intent session hidup lama dan tidak tahu "hari ini".
+  - Penambahan acara menjalankan cek bentrok lebih dulu lalu meminta konfirmasi
+    `!ya`/`!tidak` (bukan balasan "ya" biasa, karena tidak dijamin terdeteksi
+    sebagai intent ini). Durasi default 60 menit; tanpa jam → acara seharian.
+  - Ubah/hapus lewat kalimat belum didukung — diarahkan ke `!agenda hapus <id>`
+    atau aplikasi web. Bukan untuk pengingat berbasis menit (itu `!remind`).
+- **`plugins/scheduled/calendarReminder.js`** (cron `@every_1m`, `runOnStart`):
+  - Polling `reminders/due` ke MyCalendar: digest H-1, pengingat 30 menit
+    sebelum acara, dan berita high impact; juga ringkasan pengingat tertunda
+    dan informasi pengingat terlewat.
+  - Tujuan kirim: grup yang di-assign lewat `!group channel <groupJid> calendar
+    output`; fallback ke DM owner.
+  - Pengingat hanya di-ack setelah minimal satu target menerima; yang gagal
+    kirim tidak di-ack sehingga kembali pending setelah lease habis. Siklus
+    dilewati saat bot offline (agar reminder tidak ter-lease sia-sia), dilewati
+    senyap saat server `503`, dan dijaga agar tidak tumpang tindih.
+
+### Changed
+
+- **`plugins/scheduled/economicNews.js`** — interval cron `@every_4h` →
+  `@every_6h`.
+- **`plugins/triggered/myFinance.js`** — langkah strukturisasi berita ekonomi
+  kini memakai `config.ai.newsModel` (sebelumnya `config.ai.taskModel`), baik
+  di percobaan pertama maupun retry.
+
+### Removed
+
+- **`plugins/triggered/Sendmessage.js`** — triggered plugin intent
+  `sendMessage` (kirim pesan WhatsApp ke nomor lain atas perintah owner) dihapus
+  pada commit yang sama dengan fitur calendar; intent tersebut tidak lagi
+  tersedia.
+
+### Konfigurasi
+
+Tambahkan ke `.env` bot:
+
+```
+CALENDAR_API_URL=http://<host-vps>:9570
+CALENDAR_API_KEY=<EXT_API_KEY server MyCalendar>
+```
+
+---
+
 ## [6.5.0] — 2026-10-04
 
 Swap backend AI menyeluruh sesuai revisi API_USAGE.md PAF-Model terbaru (yang memperkenalkan backend ketiga **Grok**): semua chat/interaksi natural dengan user pindah dari DeepSeek ke **Qwen**, intent detection & task background berbasis tool-calling pindah dari Qwen ke **DeepSeek**, dan plugin economicNews kini memakai **Grok** (akses real-time X/Twitter) lewat pipeline riset → validasi dua langkah.

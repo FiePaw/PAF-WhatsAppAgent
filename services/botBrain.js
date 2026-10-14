@@ -21,9 +21,9 @@
 //   userProfiles    → { jid, nickname, personality, ... }
 
 import cronService from './cronService.js';
-import { getActiveJids, getAllKnownJids, getHistory, pruneAllOldMessages } from './chatHistoryService.js';
+import { getActiveJids, getAllKnownJids, getHistory, pruneAllOldMessages, recordMessage } from './chatHistoryService.js';
 import { getPresence, subscribePresence, subscribeAll } from './presenceService.js';
-import { askAI, askAISegmented, askAITool } from './aiService.js';
+import { askAI, askAISegmented, askAITool, parseSegments } from './aiService.js';
 import { getPersona } from './personaService.js';
 import { buildEnrichedContext } from './contextEnricher.js';
 import { replySegmented } from '../utils/delay.js';
@@ -109,9 +109,10 @@ export async function handleReceiptUpdate(receipts) {
  * Jika belum dibaca dan belum 24 jam → blokir proactive (tapi tidak blokir follow-up).
  *
  * @param {string} jid
+ * @param {object[]} [history] - history chat jid (untuk deteksi balasan user)
  * @returns {{ blocked: boolean, reason: string }}
  */
-function checkReadStatus(jid) {
+function checkReadStatus(jid, history = []) {
   const state = getState(jid);
 
   // Belum pernah kirim → tidak diblokir
@@ -121,6 +122,11 @@ function checkReadStatus(jid) {
   if (state.lastReadAt && state.lastReadAt >= state.lastSentAt) {
     return { blocked: false, reason: 'sudah dibaca' };
   }
+
+  // User sudah membalas setelah pesan terakhir bot → pasti sudah dibaca, walau
+  // read receipt tidak tercatat (centang biru dimatikan user / msgId tidak ada).
+  const repliedAfter = history.some((m) => m.role === 'user' && m.timestamp > state.lastSentAt);
+  if (repliedAfter) return { blocked: false, reason: 'user sudah membalas' };
 
   // Belum dibaca — cek umur pesan
   const msSinceSent = Date.now() - new Date(state.lastSentAt).getTime();
@@ -435,7 +441,7 @@ ${conversation}
 === TUGAS ===
 Berdasarkan semua informasi di atas, buat keputusan holistik:
 
-1. Pesan apa yang paling tepat untuk dikirim sekarang? (tulis natural, 1-3 kalimat)
+1. Pesan apa yang paling tepat untuk dikirim sekarang? (tulis natural, 1-3 kalimat, langsung sebagai isi pesan ke user — BUKAN balasan terhadap pesan lain. Jika terasa lebih natural dipecah jadi beberapa bubble chat, pisahkan dengan baris ### sendiri; kalau tidak, jangan pakai pemisah)
 2. Apakah ada follow-up event yang perlu diselesaikan? (dari daftar terjadwal di atas)
 3. Perbarui profil user jika ada info baru dari percakapan ini
 4. Kapan bot harus menganalisa kontak ini lagi?
@@ -483,7 +489,7 @@ async function thinkAndActForJid(jid) {
   const dueFollowUps = getDueFollowUps(jid);
 
   // ── Cek read receipt ──────────────────────────────────────────────────────
-  const { blocked, reason: readReason } = checkReadStatus(jid);
+  const { blocked, reason: readReason } = checkReadStatus(jid, history);
 
   if (blocked && dueFollowUps.length === 0) {
     logger.debug({ jid, readReason }, '⏸️ botBrain: pesan belum dibaca & tidak ada follow-up due, skip');
@@ -521,7 +527,7 @@ async function thinkAndActForJid(jid) {
     {
       type: 'object',
       properties: {
-        message: { type: 'string', description: 'Pesan yang dikirim ke user (string kosong jika tidak ada yang perlu dikirim)' },
+        message: { type: 'string', description: 'Isi pesan final yang langsung dikirim apa adanya ke user (string kosong jika tidak ada yang perlu dikirim). Pemisah ### opsional untuk memecah jadi beberapa bubble.' },
         resolvedFollowUps: { type: 'array', items: { type: 'string' }, description: '_id event follow-up yang sudah terselesaikan lewat pesan ini, array kosong jika tidak ada' },
         profileUpdates: { type: 'object', description: 'Field profil yang perlu diupdate (mis. mood, goals), objek kosong {} jika tidak ada', additionalProperties: true },
         nextAnalyzeIn: { type: 'string', description: 'Kapan analisa berikutnya, salah satu dari: 10m, 15m, 20m, 30m, 45m, 1h' },
@@ -571,19 +577,27 @@ async function thinkAndActForJid(jid) {
     const sock = global._sock;
     if (sock) {
       try {
-        // Gunakan askAISegmented agar pesan proaktif juga terasa natural seperti manusia mengetik
-        // Pakai session chat yang sama dengan `jid` → otomatis deepseek (chatModel), konsisten
-        const segments = await askAISegmented({
-          jid,
-          userText: decision.message.trim(),
-          systemPrompt,
-        });
+        // [Fix · Bot Menjawab Dirinya Sendiri] `decision.message` SUDAH pesan
+        // final yang ditulis model keputusan untuk user. Dulu pesan ini
+        // dikirim lagi ke askAISegmented() sebagai `userText` → di
+        // sendRequest() jadi turn role "user" sehingga model MEMBALAS pesan
+        // buatannya sendiri, dan balasan itulah yang terkirim ke user
+        // (session chat user juga tercemar turn palsu). Sekarang pesan hanya
+        // dipecah lokal (parseSegments, pemisah "###" opsional, tanpa
+        // panggilan AI) lalu dikirim apa adanya dengan efek mengetik natural.
+        const segments = parseSegments(decision.message.trim());
 
-        await replySegmented(sock, jid, segments);
+        const lastMsgId = await replySegmented(sock, jid, segments);
 
-        // Untuk tracking read receipt, kirim sendMessage terakhir dan ambil ID-nya
-        // replySegmented sudah kirim semua segmen — ambil sentAt saja tanpa msgId
-        sentMsgId = null; // msgId tidak bisa diambil dari replySegmented secara langsung
+        // Catat ke chatHistory sebagai pesan bot — sama seperti jalur balasan
+        // di messageHandler — supaya siklus berikutnya & profil/follow-up tahu
+        // apa yang sudah dikirim (anti-ulang topik).
+        const fullText = segments.map((s) => s.text).join(' ');
+        recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});
+
+        // ID segmen terakhir dipakai handleReceiptUpdate() untuk mendeteksi
+        // kapan pesan ini dibaca (anti-spam read receipt).
+        sentMsgId = lastMsgId;
         sendStatus = 'sent';
 
         logger.info({ jid, segments: segments.length, preview: decision.message.slice(0, 60) }, '📤 botBrain: pesan proaktif terkirim (segmented)');
@@ -653,23 +667,42 @@ async function thinkAndActForJid(jid) {
   const hasValidReport = !!decision.contextSummary?.trim() && !!decision.reason?.trim();
   const isDuplicateReport = hasValidReport && decision.reason.trim() === lastInjectedReason;
 
-  if (!hasValidReport) {
-    // (a) Sanitasi wajib — field kosong/undefined, laporan tidak berguna
-    logger.debug({ jid }, '⏭️ botBrain: laporan tidak lengkap (contextSummary/reason kosong), injeksi ke session di-skip');
-  } else if (isDuplicateReport) {
-    // (b) Dedupe/throttle — reason identik dengan siklus sebelumnya
-    logger.debug({ jid, reason: decision.reason.trim().slice(0, 60) }, '⏭️ botBrain: laporan identik dengan siklus sebelumnya, injeksi ke session di-skip (dedupe)');
+  // Pesan proaktif TIDAK lagi lewat model chat (lihat blok kirim di atas), jadi
+  // session AI user hanya tahu pesan itu terkirim lewat laporan ini. Karena itu
+  // saat pesan benar-benar terkirim, injeksi WAJIB jalan — guard (a) laporan
+  // tidak lengkap dan (b) dedupe `reason` hanya berlaku untuk siklus TANPA
+  // pesan terkirim. Tanpa ini, balasan user atas pesan proaktif tiba di session
+  // yang tidak tahu bot barusan mengirim apa.
+  const messageSent = sendStatus === 'sent';
+  const shouldInject = messageSent || (hasValidReport && !isDuplicateReport);
+
+  if (!shouldInject) {
+    if (!hasValidReport) {
+      // (a) Sanitasi wajib — field kosong/undefined, laporan tidak berguna
+      logger.debug({ jid }, '⏭️ botBrain: laporan tidak lengkap (contextSummary/reason kosong), injeksi ke session di-skip');
+    } else {
+      // (b) Dedupe/throttle — reason identik dengan siklus sebelumnya
+      logger.debug({ jid, reason: decision.reason.trim().slice(0, 60) }, '⏭️ botBrain: laporan identik dengan siklus sebelumnya, injeksi ke session di-skip (dedupe)');
+    }
   } else {
     try {
       const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
-      const summary = decision.contextSummary.trim();
-      const reason = decision.reason.trim();
+      const summary = decision.contextSummary?.trim();
+      const reason = decision.reason?.trim();
       // (c) Framing eksplisit + minta balasan minimal — supaya turn
       // terakhir di history tetap singkat, tidak merebut topik percakapan.
-      const contextMsg = `[SISTEM - BotBrain Report @ ${now}]\nKontak: ${jid}\nRingkasan: ${summary}\nAlasan: ${reason}\n${decision.message?.trim() ? `Pesan dikirim: "${decision.message.trim()}"` : 'Tidak ada pesan dikirim'}\n\n[INSTRUKSI KHUSUS UNTUK LAPORAN INI: Ini catatan internal sistem, BUKAN pesan dari user — jangan dijelaskan atau dibahas. Balas HANYA dengan satu kata singkat seperti "noted" atau "ok".]`;
+      const contextMsg = [
+        `[SISTEM - BotBrain Report @ ${now}]`,
+        `Kontak: ${jid}`,
+        summary ? `Ringkasan: ${summary}` : null,
+        reason ? `Alasan: ${reason}` : null,
+        messageSent ? `Pesan dikirim: "${decision.message.trim()}"` : 'Tidak ada pesan dikirim',
+        '',
+        '[INSTRUKSI KHUSUS UNTUK LAPORAN INI: Ini catatan internal sistem, BUKAN pesan dari user — jangan dijelaskan atau dibahas. Balas HANYA dengan satu kata singkat seperti "noted" atau "ok".]',
+      ].filter((l) => l !== null).join('\n');
       await askAI({ jid, userText: contextMsg, systemPrompt });
-      lastInjectedReason = reason;
-      logger.debug({ jid, reason: reason.slice(0, 60) }, '📥 botBrain: laporan diinject ke session (dengan framing balasan minimal)');
+      if (reason) lastInjectedReason = reason;
+      logger.debug({ jid, reason: reason?.slice(0, 60) }, '📥 botBrain: laporan diinject ke session (dengan framing balasan minimal)');
     } catch (err) {
       logger.warn({ jid, err: err.message }, '⚠️ botBrain: gagal inject konteks ke session');
     }
@@ -698,10 +731,14 @@ async function thinkAndActForJid(jid) {
     lastInjectedReason,
     sendFailureStreak,
   };
-  if (sentMsgId) {
+  // [Fix] Dulu dikunci `if (sentMsgId)` — padahal sentMsgId selalu null di
+  // jalur segmented, sehingga lastSentAt tidak pernah tersimpan dan anti-spam
+  // read-receipt (checkReadStatus) tidak pernah aktif. Sekarang andalkan status
+  // kirim; msgId diisi dari return replySegmented().
+  if (sendStatus === 'sent') {
     stateUpdate.lastSentAt    = new Date().toISOString();
-    stateUpdate.lastSentMsgId = sentMsgId;
-    stateUpdate.lastReadAt    = null; // reset read status untuk pesan baru
+    stateUpdate.lastSentMsgId = sentMsgId; // bisa null jika Baileys tidak mengembalikan key
+    stateUpdate.lastReadAt    = null;      // reset read status untuk pesan baru
   }
   await saveState(jid, stateUpdate);
 }

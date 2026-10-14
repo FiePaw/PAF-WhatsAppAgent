@@ -831,10 +831,13 @@ function computeInterSegmentDelay(previousText) {
  * return null) — kalau tidak ada delimiter ditemukan, seluruh teks dianggap
  * 1 segmen. Ini adalah default yang AMAN, bukan kegagalan.
  *
+ * Di-export agar jalur yang SUDAH punya teks final (mis. pesan proaktif
+ * botBrain) bisa memecah tanpa memanggil model lagi.
+ *
  * @param {string} raw
  * @returns {{ text: string, delay: number }[]}
  */
-function parseSegments(raw) {
+export function parseSegments(raw) {
   const cleaned = (raw ?? '').replace(/```/g, '').trim();
 
   if (!cleaned) {

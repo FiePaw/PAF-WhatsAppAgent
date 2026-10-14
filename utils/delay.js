@@ -51,9 +51,12 @@ export async function typingDelay(sock, jid, text) {
  * @param {string} jid
  * @param {{ text: string, delay: number }[]} segments  — dari askAISegmented()
  * @param {object} [quotedMsg]   — pesan yang di-quote (opsional, hanya segmen pertama)
- * @returns {Promise<void>}
+ * @returns {Promise<string|null>} ID pesan TERAKHIR yang terkirim (untuk tracking
+ *   read receipt); null jika tidak tersedia. Pemanggil lama yang mengabaikan
+ *   return value tidak terpengaruh.
  */
 export async function replySegmented(sock, jid, segments, quotedMsg = null) {
+  let lastMsgId = null;
   for (let i = 0; i < segments.length; i++) {
     const { text, delay } = segments[i];
 
@@ -77,7 +80,8 @@ export async function replySegmented(sock, jid, segments, quotedMsg = null) {
 
     // Kirim pesan — hanya segmen pertama yang meng-quote pesan asli
     const sendOpts = i === 0 && quotedMsg ? { quoted: quotedMsg } : {};
-    await sock.sendMessage(jid, { text }, sendOpts);
+    const sent = await sock.sendMessage(jid, { text }, sendOpts);
+    lastMsgId = sent?.key?.id ?? lastMsgId;
 
     // Paused setelah kirim
     try {
@@ -86,4 +90,6 @@ export async function replySegmented(sock, jid, segments, quotedMsg = null) {
       // ignore
     }
   }
+
+  return lastMsgId;
 }

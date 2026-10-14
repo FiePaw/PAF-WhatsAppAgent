@@ -34,7 +34,7 @@ const config = {
   ai: {
     baseUrl: process.env.AI_API_URL || '',
     chatModel: process.env.AI_CHAT_MODEL || 'qwen',
-    taskModel: process.env.AI_TASK_MODEL || 'deepseek',
+    taskModel: process.env.AI_TASK_MODEL || 'grok',
     intentModel: process.env.AI_INTENT_MODEL || 'deepseek',
     newsModel: process.env.AI_NEWS_MODEL || 'grok',
     timeout: 3000000,
