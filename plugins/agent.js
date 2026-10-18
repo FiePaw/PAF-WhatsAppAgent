@@ -35,8 +35,8 @@ const plugin = {
         text += `🔧 Chat Model: ${config.ai.chatModel}\n`;
         text += `🔧 Task Model: ${config.ai.taskModel}\n`;
         text += `🔍 Intent Model: ${config.ai.intentModel}\n`;
-        text += `📰 News Model: ${config.ai.newsModel}\n`;
-        text += `🌍 API URL: ${config.ai.baseUrl || '(belum diset)'}`;
+        text += `🌍 API URL: ${config.ai.baseUrl || '(belum diset)'}\n`;
+        text += `🔐 API Auth: ${config.ai.apiKey ? '✅ Configured' : '⚠️ Missing (PAF_API_TOKEN)'}`;
 
         await reply(text);
         break;

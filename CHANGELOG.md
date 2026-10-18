@@ -3,6 +3,132 @@
 Semua perubahan penting pada project ini didokumentasikan di file ini.  
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [6.8.1] — 2026-10-19
+
+**Support Client API Token Authentication (PAF-Model Update)**
+
+Menyesuaikan bot dengan sistem autentikasi baru di PAF-Model (per `API_USAGE.md` §3):
+- **`config/config.js`**: Menambahkan konfigurasi `apiKey` di `config.ai` yang membaca `process.env.AI_API_KEY || process.env.PAF_API_TOKEN || ''`.
+- **`services/aiService.js`**: Menambahkan Axios request interceptor untuk otomatis menyertakan header `Authorization: Bearer <API_TOKEN>` pada seluruh pemanggilan endpoint REST (`/v1/chat/completions`, `DELETE /v1/sessions/{id}`, `GET /v1/models`, `GET /health`).
+- **`services/aiService.js`**: Memperbarui penanganan error pada `askAI` untuk membedakan status `401` akibat API token (`WWW-Authenticate: Bearer`) dengan sesi worker Grok, serta menangani error `503` (server VPS belum mengonfigurasi token).
+- **`services/intentSessionService.js`**: Menambahkan Axios request interceptor serupa untuk memastikan intent session detector juga menyertakan Bearer auth.
+- **`plugins/agent.js`**: Menampilkan status konfigurasi API Auth pada command `!status`.
+- **`.env`**: Menambahkan template variabel `PAF_API_TOKEN`.
+
+---
+
+## [6.8.0] — 2026-10-15
+
+**Major update MyFinance**: ubah data, laporan berperiode, catat banyak transaksi
+sekaligus, pengingat otomatis, dan baca foto struk. Juga
+memulihkan `plugins/triggered/myFinance.js` yang tertimpa kode economicNews.
+
+### Fixed — myFinance.js Tertimpa
+
+- Commit `09724d8` ("model change") tidak sengaja menimpa seluruh
+  `plugins/triggered/myFinance.js` dengan kode pipeline berita ekonomi (Grok).
+  Akibatnya file itu tidak punya `intent`/`handler`, dilewati loader, dan intent
+  `myFinance` tidak aktif. File dipulihkan dari commit `69e166c` lalu
+  dikembangkan di versi ini.
+- `todayDate()` kini memakai WIB (`todayStr()`); sebelumnya UTC sehingga
+  transaksi tanpa tanggal yang dicatat 00:00–07:00 WIB tersimpan sebagai kemarin.
+
+### Added — Fitur MyFinance
+
+- **Ubah data** — action baru `updateTransaction`, `updateBudget`, `updateBill`,
+  `updateInvestment` ("ubah kopi tadi jadi 25rb", "limit anggaran makan jadi
+  600rb"). Menampilkan perubahan sebelum → sesudah dan meminta konfirmasi
+  `!ya`/`!tidak`. Transaksi tanpa kata kunci = transaksi terbaru. Jika beberapa
+  data cocok, owner memilih angka dulu (`confirmDelete` kini juga melayani
+  pilihan ubah). Server FinTrack dipakai lewat `PUT /ext/<resource>/<id>`; jika
+  PUT tidak didukung (405/501/404 non-JSON) otomatis fallback: buat data baru
+  dulu, baru hapus yang lama.
+- **Laporan berperiode** — `getSummary` menerima `period` (`today`, `yesterday`,
+  `this_week`, `last_week`, `last_7_days`, `this_month`, `last_month`,
+  `this_year`, `custom` + `date_from`/`date_to`) dan filter `category`. Isi:
+  pemasukan/pengeluaran/saldo, rata-rata pengeluaran per hari, perbandingan
+  dengan periode sebelumnya (periode berjalan dibandingkan dengan rentang awal
+  yang sama panjang), pengeluaran per kategori (% dan progres anggaran),
+  pengeluaran terbesar, tagihan terdekat, modal investasi, transaksi terbaru.
+- **Catat banyak sekaligus** — action `addTransactions` (`items[]`, maks. 20):
+  "kopi 20rb, makan siang 35rb, parkir 5rb" → satu pratinjau, satu konfirmasi
+  `!ya`. Jika ada item tidak valid, tidak ada yang disimpan.
+- **Pengingat otomatis** — `plugins/scheduled/finReminder.js` (cron tiap 30
+  menit, hanya 07:00–21:59 WIB): tagihan jatuh tempo H-3 dan H-1 (auto-debit
+  dilewati; tanggal 31 dipangkas ke akhir bulan), peringatan anggaran 80% dan
+  100% (sekali per kategori per bulan), ringkasan mingguan Minggu 19:00 WIB.
+  Tujuan: grup `!group channel <groupJid> myFinance output`, fallback DM owner.
+  State dedupe di `data/finReminderState.json` (tidak kirim ulang setelah
+  restart); ditandai terkirim hanya setelah kirim sukses.
+- **Baca foto struk** — action `scanReceipt`: foto struk/bukti transfer dibaca
+  vision Qwen → nominal, tanggal, kategori (dicocokkan dengan kategori yang
+  sudah ada), keterangan → pratinjau → konfirmasi `!ya` sebelum disimpan.
+
+### Added — Service Baru
+
+- `services/finTrackClient.js` — klien HTTP FinTrack: timeout 10 detik,
+  `FinTrackError` (`status`, `body`), env `FINTRACK_API_URL` /
+  `FINTRACK_API_KEY` (default = nilai lama), `list/create/remove/update`.
+- `services/finTrackReport.js` — logika murni (periode WIB, laporan,
+  anggaran vs realisasi, jatuh tempo tagihan, portofolio).
+- `services/finTrackReceipt.js` — ekstraksi struk via vision.
+
+### Changed
+
+- `plugins/calendar.js` — `!ya` kini juga menjalankan konfirmasi plugin lain
+  lewat `calendarPending` (entry `{ kind, run }`); `!tidak` membatalkannya.
+  Satu konfirmasi tertunda per pengirim (yang terbaru menggantikan).
+- `plugins/triggered/myFinance.js` — `intentDefinition` dan schema `parameters`
+  diperluas (action baru, `period`, `date_from`, `date_to`, `items`, `newName`);
+  pesan error khusus saat FinTrack tidak terjangkau (`status 0`).
+
+### Notes
+
+- Belum diubah: `addTransaction` tunggal dan semua `delete*` tetap langsung
+  tereksekusi tanpa `!ya` seperti sebelumnya.
+- Endpoint `PUT` di FinTrack belum diverifikasi terhadap `database.py`;
+  fallback ubah-data disiapkan untuk itu.
+
+---
+
+## [6.7.0] — 2026-10-15
+
+Intent session dan chat session sekarang dikirim **berbarengan** (paralel), tidak
+lagi menunggu intent selesai dulu. Bot yang memutuskan setelah keduanya selesai:
+ada task atau tidak.
+
+### Changed — Intent & Chat Session Paralel
+
+- **Sebelumnya**: alur sequential — intent detection dulu (timeout 20 detik),
+  baru chat session. Menambah latensi ke SEMUA pesan owner, termasuk yang tidak
+  butuh aksi.
+- **Sekarang**: intent session dan chat session dikirim bersamaan
+  (`Promise.all`), lalu bot memutuskan:
+  - **Tidak ada task** → kirim balasan chat session saja.
+  - **Ada task** → kirim balasan chat session, lalu jalankan task dari intent
+    session.
+- Intent timeout / error / `params` kosong dianggap "tidak ada task". Jika chat
+  gagal tetapi ada task, task tetap dijalankan.
+- Berlaku untuk owner DM dan grup owner (hanya jika `channel.input` aktif).
+- Tidak ada risiko double-reply: plugin hanya dieksekusi setelah hasil deteksi
+  final, jadi `ownerReplyGuard` / `groupReplyGuard` dihapus.
+
+### Added
+
+- `detectTriggeredIntent(ctx)` di `core/Triggeredpluginhandler.js` — hanya
+  deteksi intent, TANPA eksekusi plugin.
+- `executeTriggeredPlugin(ctx, detected)` — jalankan plugin hasil deteksi dan
+  inject hasilnya ke chat session.
+- `runIntentAndChat()` di `core/messageHandler.js` — orkestrasi paralel intent +
+  chat dan keputusan task/tanpa task.
+
+### Notes
+
+- `handleTriggeredPlugin()` dipertahankan sebagai wrapper sequential
+  (deteksi → eksekusi) untuk kompatibilitas; tidak lagi dipakai `messageHandler`.
+- Balasan chat bisa terkirim sebelum task selesai, sehingga chat session belum
+  tahu hasil task saat membalas; hasil task di-inject ke chat session sesudahnya.
+
 ---
 
 ## [6.6.1] — 2026-10-14

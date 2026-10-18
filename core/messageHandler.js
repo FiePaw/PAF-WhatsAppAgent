@@ -5,7 +5,7 @@ import { isOwner, isCommand, parseCommand } from '../utils/helpers.js';
 import { typingDelay, replySegmented } from '../utils/delay.js';
 import { askAI, askAISegmented, askAITool, describeImage, describeDocument, describeSocialMedia } from '../services/aiService.js';
 import { getPersona } from '../services/personaService.js';
-import { handleTriggeredPlugin } from './triggeredPluginHandler.js';
+import { detectTriggeredIntent, executeTriggeredPlugin } from './triggeredPluginHandler.js';
 import { getGroupChannel, getGroupPersona } from '../services/groupService.js';
 import { recordMessage, getHistory } from '../services/chatHistoryService.js';
 import { extractSocialMediaUrl, downloadSocialMedia } from '../services/socialMediaService.js';
@@ -25,11 +25,9 @@ const INTENT_DETECTION_TIMEOUT_MS = 20_000;
  * Race sebuah promise melawan timeout — jika promise belum selesai dalam
  * `ms` milidetik, resolve dengan `timeoutValue` alih-alih menunggu terus.
  * CATATAN: promise asli TIDAK dibatalkan (JS tidak punya cancellation
- * native) — ia tetap berjalan di background dan bisa selesai belakangan.
- * Ini sebabnya messageHandler.js memasang `replyGuard` di sekitar
- * pemanggilan withTimeout(handleTriggeredPlugin(...)) — supaya jika plugin
- * baru selesai SETELAH timeout (dan AI chat sudah lanjut/reply), reply dari
- * plugin yang terlambat itu tidak ikut terkirim dobel ke user.
+ * native) — ia tetap berjalan di background. Aman, karena deteksi intent
+ * tidak mengeksekusi apa pun (hanya mengembalikan hasil); hasil yang datang
+ * terlambat setelah timeout diabaikan.
  *
  * @param {Promise} promise
  * @param {number} ms
@@ -42,6 +40,51 @@ function withTimeout(promise, ms, timeoutValue) {
     timer = setTimeout(() => resolve(timeoutValue), ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Jalankan intent session & chat session BERSAMAAN (paralel), lalu bot yang
+ * memutuskan setelah keduanya selesai:
+ *   - tidak ada task  → kirim balasan chat session saja
+ *   - ada task        → kirim balasan chat session, lalu jalankan task intent
+ * Intent yang timeout/error dianggap "tidak ada task". Jika chat gagal tetapi
+ * ada task, task tetap dijalankan. Tidak ada lagi race/double-reply karena
+ * eksekusi task hanya terjadi di sini, setelah hasil deteksi final.
+ *
+ * @param {object}   p
+ * @param {object}   p.ctx        - ctx untuk plugin (sock, msg, jid, sender, reply, ...)
+ * @param {boolean}  p.detect     - false jika deteksi intent tidak perlu (mis. grup tanpa input)
+ * @param {Function} p.chatFn     - async () => segments (request ke chat session)
+ * @param {Function} p.sendChat   - async (segments) => void (kirim balasan chat)
+ * @param {Function} p.onChatError- async (err) => void (dipanggil jika chat gagal & tidak ada task)
+ */
+async function runIntentAndChat({ ctx, detect = true, chatFn, sendChat, onChatError }) {
+  const intentPromise = detect
+    ? withTimeout(
+        detectTriggeredIntent(ctx).catch((err) => {
+          logger.error({ sender: ctx.sender, err: err.message }, 'Error di intent detection');
+          return null;
+        }),
+        INTENT_DETECTION_TIMEOUT_MS,
+        null
+      )
+    : Promise.resolve(null);
+
+  const [detected, chat] = await Promise.all([
+    intentPromise,
+    chatFn().then((segments) => ({ ok: true, segments }), (error) => ({ ok: false, error })),
+  ]);
+
+  if (chat.ok) {
+    await sendChat(chat.segments);
+  } else {
+    logger.error({ sender: ctx.sender, err: chat.error?.message }, 'Error saat request ke chat session');
+    if (!detected) await onChatError(chat.error);
+  }
+
+  if (detected) {
+    await executeTriggeredPlugin(ctx, detected);
+  }
 }
 
 /**
@@ -599,60 +642,24 @@ export async function handleMessage(sock, msg, plugins) {
       return;
     }
 
-    // ── Pesan natural owner di grup → intent detection lalu AI chat ─────
-    // [Fix Bug 2 & 3 · Double-Reply Race Condition] Sebelumnya dijalankan
-    // PARALEL (intent + AI chat sekaligus) dengan guard Promise.race yang
-    // tidak reliable — plugin bisa mengirim reply sendiri (via
-    // interceptedReply di core/triggeredPluginHandler.js) independen dari
-    // apakah AI chat sudah/belum reply, menyebabkan user bisa menerima 2
-    // balasan untuk 1 pesan. Fix: SEQUENTIAL — intent detection dulu (dengan
-    // timeout), baru fallback ke AI chat kalau tidak ada intent yang cocok.
-    // replyGuard menutup celah residual: jika plugin baru selesai SETELAH
-    // timeout (saat AI chat sudah mulai/reply), reply-nya diabaikan.
+    // ── Pesan natural owner di grup → intent session & chat session PARALEL ──
+    // Bot memutuskan setelah keduanya selesai: tanpa task → chat saja;
+    // ada task → kirim chat, lalu jalankan task (lihat runIntentAndChat).
     const groupPersona = getGroupPersona(jid);
     const ownerPersonaObj = getPersona(sender, owner);
     const groupSystemPrompt = groupPersona || ownerPersonaObj.prompt;
     // Model dipilih otomatis oleh askAISegmented (deepseek untuk chat, qwen jika ada lampiran)
 
-    const groupReplyGuard = { sent: false };
-    const groupGuardedReply = async (replyText) => {
-      if (groupReplyGuard.sent) {
-        logger.warn({ jid }, '⚠️ Intent plugin grup selesai setelah timeout & AI sudah reply — diabaikan (race-safety)');
-        return;
-      }
-      await reply(replyText);
-    };
-
-    const groupCtx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply: groupGuardedReply, groupChannel: channel, attachments };
-
-    const groupIntentHandled = channel.input
-      ? await withTimeout(
-          handleTriggeredPlugin(groupCtx).catch((err) => {
-            logger.error({ sender, jid, err: err.message }, 'Error di intent detection grup');
-            return false;
-          }),
-          INTENT_DETECTION_TIMEOUT_MS,
-          false
-        )
-      : false;
-
-    if (groupIntentHandled) {
-      // Plugin sudah mengirim reply-nya sendiri — selesai, JANGAN panggil AI chat.
-      return;
-    }
-
-    // Tutup guard SEBELUM mulai AI chat — plugin yang selesai belakangan
-    // (setelah timeout) tidak akan bisa ikut reply lagi.
-    groupReplyGuard.sent = true;
-
+    const groupCtx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply, groupChannel: channel, attachments };
     const groupContextHints = computeContextHints(jid, intentText);
-    try {
-      const groupSegments = await askAISegmented({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, contextHints: groupContextHints });
-      await replySegmented(sock, jid, groupSegments, msg);
-    } catch (err) {
-      logger.error({ sender, jid, err: err.message }, 'Error saat request ke AI (group)');
-      await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
-    }
+
+    await runIntentAndChat({
+      ctx: groupCtx,
+      detect: !!channel.input,
+      chatFn: () => askAISegmented({ jid: jid, userText: intentText, systemPrompt: groupSystemPrompt, attachments, contextHints: groupContextHints }),
+      sendChat: (segments) => replySegmented(sock, jid, segments, msg),
+      onChatError: () => reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.'),
+    });
     return;
   }
 
@@ -681,27 +688,12 @@ export async function handleMessage(sock, msg, plugins) {
     return;
   }
 
-  // ─── Owner: intent detection dulu, fallback ke AI chat (sequential) ──
-  // [Fix Bug 2 & 3 · Double-Reply Race Condition] Sebelumnya intent
-  // detection dan AI chat dijalankan PARALEL, dengan guard `Promise.race`
-  // untuk "mengintip" siapa selesai duluan — pola ini TIDAK RELIABLE di
-  // JavaScript (meracing promise yang sudah settle melawan Promise.resolve()
-  // baru tidak memberi jawaban pasti soal urutan penyelesaian, keduanya
-  // sama-sama butuh microtask tick) DAN tidak bisa mencegah plugin
-  // triggered mengirim reply-nya sendiri secara independen (lihat
-  // interceptedReply di core/triggeredPluginHandler.js). Akibatnya user bisa
-  // menerima 2 balasan untuk 1 pesan — salah satunya AI chat yang tidak tahu
-  // apa-apa soal hasil eksekusi plugin nyata, sehingga bisa berhalusinasi
-  // seolah suatu aksi (mis. transaksi keuangan) berhasil padahal tidak.
-  //
-  // Fix: SEQUENTIAL — intent detection dulu (dengan timeout wajar agar
-  // deteksi yang macet/lambat tidak membuat bot diam total), baru fallback
-  // ke AI chat jika tidak ada intent yang cocok. Trade-off yang disadari:
-  // menambah latensi ke SEMUA pesan owner (bukan hanya yang butuh aksi
-  // plugin), demi kebenaran (tidak akan pernah ada 2 balasan untuk 1 pesan).
-  // replyGuard menutup celah residual: karena JS tidak punya cancellation,
-  // promise handleTriggeredPlugin yang timeout tetap jalan di background —
-  // jika ia baru selesai SETELAH kita mulai AI chat, reply-nya diabaikan.
+  // ─── Owner: intent session & chat session PARALEL ───────────────────
+  // Keduanya dikirim bersamaan (tidak menunggu intent selesai). Bot lalu
+  // memutuskan: tanpa task → kirim balasan chat saja; ada task → kirim
+  // balasan chat, lalu jalankan task dari intent session. Eksekusi task
+  // hanya terjadi di runIntentAndChat setelah hasil deteksi final, jadi
+  // tidak ada race/double-reply seperti desain paralel lama.
   if (owner) {
     // Catat pesan teks natural owner ke chatHistory (dengan quote context jika ada)
     if (text.trim() || quotedText) {
@@ -719,46 +711,20 @@ export async function handleMessage(sock, msg, plugins) {
       recordSocialMediaToHistory({ jid, sender, attachment: socialResult.attachment, metadata: socialResult.metadata, url: socialUrl }).catch(() => {});
     }
 
-    const ownerReplyGuard = { sent: false };
-    const guardedReply = async (replyText) => {
-      if (ownerReplyGuard.sent) {
-        logger.warn({ sender: sender.split('@')[0] }, '⚠️ Intent plugin selesai setelah timeout & AI sudah reply — diabaikan (race-safety)');
-        return;
-      }
-      await reply(replyText);
-    };
-
-    const ctx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply: guardedReply, attachments };
+    const ctx = { sock, msg, jid, sender, isOwner: owner, text: intentText, reply, attachments };
     const { prompt: systemPrompt } = getPersona(sender, owner);
-
-    const intentHandled = await withTimeout(
-      handleTriggeredPlugin(ctx).catch((err) => {
-        logger.error({ sender, err: err.message }, 'Error di intent detection');
-        return false;
-      }),
-      INTENT_DETECTION_TIMEOUT_MS,
-      false
-    );
-
-    if (intentHandled) {
-      // Plugin sudah mengirim reply-nya sendiri (via interceptedReply) — selesai.
-      return;
-    }
-
-    // Tutup guard SEBELUM mulai AI chat — plugin yang selesai belakangan
-    // (setelah timeout) tidak akan bisa ikut reply lagi.
-    ownerReplyGuard.sent = true;
-
     const ownerContextHints = computeContextHints(sender, intentText);
-    try {
-      const segments = await askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, contextHints: ownerContextHints });
-      const fullText = segments.map((s) => s.text).join(' ');
-      await replySegmented(sock, jid, segments, msg);
-      recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});
-    } catch (err) {
-      logger.error({ sender, err: err.message }, 'Error saat request ke AI');
-      await reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.');
-    }
+
+    await runIntentAndChat({
+      ctx,
+      chatFn: () => askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, contextHints: ownerContextHints }),
+      sendChat: async (segments) => {
+        const fullText = segments.map((s) => s.text).join(' ');
+        await replySegmented(sock, jid, segments, msg);
+        recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});
+      },
+      onChatError: () => reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.'),
+    });
     return;
   }
 

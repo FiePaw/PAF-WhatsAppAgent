@@ -50,6 +50,15 @@ const client = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// Pasang Bearer token otomatis di setiap request jika API token dikonfigurasi
+client.interceptors.request.use((reqConfig) => {
+  const token = config.ai.apiKey || process.env.PAF_API_TOKEN || process.env.AI_API_KEY;
+  if (token && !reqConfig.headers['Authorization'] && !reqConfig.headers['authorization']) {
+    reqConfig.headers['Authorization'] = `Bearer ${token}`;
+  }
+  return reqConfig;
+});
+
 // ─── In-memory store intent session ─────────────────────────────────────
 // Map<senderJid, sessionId>
 const _store = new Map();
@@ -133,7 +142,7 @@ export async function initIntentSession(senderJid) {
       model: config.ai.intentModel,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: 'Pesan pertama untuk inisialisasi: "halo"' },
+        { role: 'user', content: 'Pesan pertama untuk inisialisasi: "Intent Detector"' },
       ],
       tools,
       tool_choice: 'auto', // bermakna untuk Qwen; DeepSeek mengabaikannya — harmless

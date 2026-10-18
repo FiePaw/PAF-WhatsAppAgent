@@ -34,6 +34,9 @@
 //      di server dan diam-diam mulai percakapan baru — sekarang kita respons
 //      aktif: trigger memoryService.summarizeAndRemember() di background
 //      agar konteks yang sempat ada tidak hilang percuma (lihat sendRequest).
+//   6. Client API Token Authentication (§3): Setiap endpoint REST API kini wajib
+//      menyertakan header `Authorization: Bearer <API_TOKEN>`. Dikonfigurasi
+//      lewat PAF_API_TOKEN atau AI_API_KEY di .env.
 // ─────────────────────────────────────────────────────────────────────────
 import axios from 'axios';
 import config from '../config/config.js';
@@ -56,6 +59,15 @@ const TASK_TIMEOUTS = {
 const client = axios.create({
   baseURL: config.ai.baseUrl,
   headers: { 'Content-Type': 'application/json' },
+});
+
+// Pasang Bearer token otomatis di setiap request jika API token dikonfigurasi
+client.interceptors.request.use((reqConfig) => {
+  const token = config.ai.apiKey || process.env.PAF_API_TOKEN || process.env.AI_API_KEY;
+  if (token && !reqConfig.headers['Authorization'] && !reqConfig.headers['authorization']) {
+    reqConfig.headers['Authorization'] = `Bearer ${token}`;
+  }
+  return reqConfig;
 });
 
 /**
@@ -316,10 +328,19 @@ export async function askAI({ jid, userText, systemPrompt, thinkMode, attachment
     logger.error({ jid, status, detail }, 'AI API error');
 
     if (status === 504) return '⏱️ Tidak ada worker AI tersedia saat ini, coba lagi sebentar.';
+    if (status === 503) return '⚠️ Server AI belum mengonfigurasi API token (503). Hubungi admin VPS.';
     if (status === 502) return '⚠️ AI (Qwen) gagal merespons, coba lagi.';
     if (status === 500) return '⚠️ Terjadi kesalahan di server AI, coba lagi.';
     if (status === 429) return '⏳ AI sedang kena rate limit, coba lagi beberapa saat.';
-    if (status === 401) return '🔐 Sesi AI tidak valid (perlu login ulang di worker), coba lagi nanti.';
+    if (status === 401) {
+      const isApiTokenError =
+        err.response?.headers?.['www-authenticate']?.toLowerCase().includes('bearer') ||
+        (typeof detail === 'string' && detail.toLowerCase().includes('api token'));
+      if (isApiTokenError) {
+        return '🔐 API Token bot tidak valid atau belum diisi (cek PAF_API_TOKEN di .env).';
+      }
+      return '🔐 Sesi AI tidak valid (perlu login ulang di worker), coba lagi nanti.';
+    }
     if (status === 404) return '🔄 Sesi AI tidak ditemukan, coba kirim pesanmu sekali lagi.';
     if (status === 400 || status === 422) return '❌ Permintaan ke AI tidak valid.';
     return '❌ Maaf, AI sedang tidak bisa diakses saat ini.';

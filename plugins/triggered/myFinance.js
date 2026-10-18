@@ -1,311 +1,736 @@
-// plugins/scheduled/economicNews.js
-// Scheduled plugin: kirim ringkasan berita ekonomi global setiap 4 jam.
-// Pipeline dua langkah: (1) Grok (config.ai.newsModel) riset berita dengan
-// akses real-time X/Twitter bawaannya dan menulis hasilnya sebagai JSON
-// murni — Grok v1 TIDAK mendukung function-calling (API_USAGE.md §9);
-// (2) Qwen (config.ai.taskModel) memvalidasi & menstrukturkan hasil riset
-// via tool-calling (§9) → diformat menjadi pesan WhatsApp yang rapi.
-//
-// ─── Migrasi dari raw-JSON ke tool-calling ───────────────────────────────
-// Sebelumnya: AI diminta balas raw JSON, dan karena model sering menyisipkan
-// markdown link `[nama](url)` DI DALAM string `summary`, JSON hasilnya
-// sering rusak (newline/karakter aneh di tengah string) — perlu hack
-// `sanitizeRawJson()` + regex ekstraksi URL yang rapuh dan sulit dirawat.
-// Sekarang: skema tool punya field `sourceUrl` TERPISAH dari `summary` —
-// AI tidak perlu lagi menyisipkan markdown link di tengah teks bebas, dan
-// gateway sendiri yang menjamin bentuk `tool_calls` (bukan kita yang regex).
-//
-// Setup grup: !group channel <groupJid> economicNews output/both
-// Tanpa grup tertaut: berita dikirim langsung ke DM owner
-
-import { askAITool, askAIJson } from '../../services/aiService.js';
-import { buildFunctionTool } from '../../utils/toolCalling.js';
-import { getGroupOutput } from '../../services/groupService.js';
-import config from '../../config/config.js';
+// plugins/triggered/myFinance.js
+// Intent keuangan pribadi via FinTrack (v6.8.0: edit data, laporan berperiode, input banyak
+// sekaligus, pengingat otomatis [plugins/scheduled/finReminder.js], baca struk).
 import logger from '../../utils/logger.js';
+import { ft, FinTrackError, list, create, update } from '../../services/finTrackClient.js';
+import { formatRp, resolvePeriod, buildReport } from '../../services/finTrackReport.js';
+import { extractReceipt } from '../../services/finTrackReceipt.js';
+import { setPending } from '../../services/calendarPending.js';
+import { todayStr, isValidDate } from '../../services/calendarFormat.js';
 
-// ─── Instruksi konten untuk AI (bukan lagi instruksi FORMAT JSON manual) ─
-const NEWS_CONTENT_RULES = `Kamu adalah analis ekonomi profesional. Tugasmu adalah memberikan ringkasan berita ekonomi terkini.
+// ─── HELPER ──────────────────────────────────────────────────────────────────
+// Koneksi & kredensial FinTrack ada di services/finTrackClient.js
+// (env FINTRACK_API_URL / FINTRACK_API_KEY, default = nilai lama).
 
-Instruksi GLOBAL (5 berita):
-- Pilih berita ekonomi paling penting dari seluruh dunia
-- Cakup: pasar keuangan, cryptocurrency, commodity, geopolitik ekonomi, kebijakan central bank, merger & akuisisi besar-besaran
-- Sumber Utama: Twitter/X, Instagram, TikTok dari akun resmi ekonomi/keuangan global (misal: @WSJ, @Bloomberg, @Reuters, @FT, @CNBC, @MarketWatch) dan sumber berita online terpercaya lainnya
-- Sumber: Reuters, Bloomberg, WSJ, Financial Times, CNBC, MarketWatch, dan sumber terpercaya lainnya
+// Tanggal hari ini dalam WIB (sebelumnya UTC → salah tanggal pada 00:00–07:00 WIB).
+function todayDate() {
+  return todayStr();
+}
 
-Instruksi ECONOMIC CALENDAR (diekstrak dari ForexFactory, TradingView, atau sumber sejenis):
-- Ambil 5 event ekonomi paling penting yang akan/sedang terjadi (NFP, CPI, PPI, Interest Rate Decision, GDP, dll)
-- Negara: US, EU, Inggris, Jepang, China, atau negara dengan dampak global besar
-- Waktu: dalam format WIB daerah Bekasi di Indonesia
-- Impact: HIGH untuk acara pemecah pasar, MEDIUM untuk moderate, LOW untuk minor
+// ─── PENDING CONFIRMATIONS (in-memory) ───────────────────────────────────────
+// key: senderJid → { mode: 'delete'|'update', endpoint?, resource?, patch?, candidates: [{id, label, current?}], expiresAt }
+const pendingConfirm = new Map();
 
-Instruksi INDONESIA (5 berita):
-- Fokus pada ekonomi Indonesia, IHSG, rupiah, inflasi, BI policy, sektor industri lokal
-- Cakup: pasar modal, perbankan, pertanian, manufaktur, trade, investasi asing, dan teknologi
-- Sumber: Tempo, Kompas, Bisnis, Detik, Antara, Katadata, Kontan, atau media sosial seperti Twitter/X, Instagram, TikTok dari akun resmi ekonomi/keuangan Indonesia
-
-Aturan field "hot": Tandai true hanya jika berita tersebut benar-benar luar biasa, misalnya: kolaps pasar mendadak, kebijakan darurat pemerintah, bencana ekonomi, rekor bersejarah, atau peristiwa yang jarang terjadi dalam dekade. Berita rutin tetap false.
-
-Aturan WAJIB:
-- Field "summary" HARUS plain text saja — JANGAN menyisipkan link/markdown apapun di dalamnya. Taruh URL sumber di field "sourceUrl" yang terpisah.
-- "sourceUrl" harus URL lengkap dan valid dengan protokol https://
-- Jangan ulangi berita dari update sebelumnya
-- JANGAN MENGGUNAKAN MARKDOWN apapun di dalam summary, cukup plain text.
-
-Gunakan bahasa Indonesia yang singkat, jelas, dan mudah dipahami.`;
-
-// Varian untuk Qwen (langkah 2): laporkan via tool-calling (§9 API_USAGE.md).
-const NEWS_INSTRUCTIONS = `${NEWS_CONTENT_RULES}
-
-Setelah selesai menganalisa, panggil fungsi "report_economic_update" dengan hasilnya.`;
-
-// Varian untuk Grok (langkah 1): output raw-JSON. Grok v1 tidak mendukung
-// function-calling (API_USAGE.md §9 — `tools` diterima tanpa error tapi
-// tidak pernah dieksekusi), jadi struktur data diminta langsung di prompt
-// dan diparse di client (askAIJson + extractJsonBlock di aiService — tahan
-// code fence & teks pembuka/penutup).
-const GROK_RESEARCH_INSTRUCTIONS = `${NEWS_CONTENT_RULES}
-
-FORMAT OUTPUT (WAJIB):
-Balas HANYA satu objek JSON valid — tanpa code fence, tanpa teks pembuka/penutup, tanpa komentar apapun. Mulai dari { dan akhiri dengan }. Bentuknya:
-{"datetime": "<tanggal & waktu sekarang, format DD MMM YYYY HH:mm WIB>", "global": [{"headline": "...", "summary": "...", "sourceUrl": "https://...", "hot": false}], "economicCalendar": [{"event": "...", "country": "US", "time": "<DD MMM YYYY HH:mm WIB>", "forecast": "...", "previous": "...", "impact": "HIGH"}], "indonesia": [{"headline": "...", "summary": "...", "sourceUrl": "https://...", "hot": false}]}
-- "global" dan "indonesia" WAJIB berisi 5 item; "economicCalendar" berisi maksimal 5 event, boleh array kosong jika tidak ada.
-- Jangan tulis karakter apapun di luar objek JSON tersebut.`;
-
-// ─── Tool schema ─────────────────────────────────────────────────────────
-const newsItemSchema = {
-  type: 'object',
-  properties: {
-    headline: { type: 'string', description: 'Judul singkat berita' },
-    summary: { type: 'string', description: '1-3 kalimat ringkasan, PLAIN TEXT saja, TANPA link/markdown di dalamnya' },
-    sourceUrl: { type: 'string', description: 'URL lengkap sumber berita (https://...), field terpisah dari summary' },
-    hot: { type: 'boolean', description: 'true hanya jika berita ini benar-benar luar biasa/jarang terjadi' },
+// ─── KONFIGURASI PER RESOURCE (dipakai fitur ubah data) ──────────────────────
+const has = (s, k) => String(s || '').toLowerCase().includes(k);
+const RES = {
+  transactions: {
+    label: 'Transaksi',
+    match: (x, k) => has(x.description, k) || has(x.category, k),
+    describe: (x) => `${formatRp(x.amount)} [${x.category}] — ${x.description || '-'} (${x.date})`,
+    fields: { type: 'Jenis', amount: 'Nominal', category: 'Kategori', date: 'Tanggal', description: 'Keterangan' },
+    fmt: { amount: formatRp, type: (v) => (v === 'income' ? 'Pemasukan' : 'Pengeluaran') },
   },
-  required: ['headline', 'summary', 'sourceUrl', 'hot'],
+  budgets: {
+    label: 'Anggaran',
+    match: (x, k) => has(x.category, k),
+    describe: (x) => `${x.category} — limit ${formatRp(x.limit)}/bulan`,
+    fields: { category: 'Kategori', limit: 'Limit' },
+    fmt: { limit: formatRp },
+  },
+  bills: {
+    label: 'Tagihan',
+    match: (x, k) => has(x.name, k) || has(x.category, k),
+    describe: (x) => `${x.name} — ${formatRp(x.amount)} (tgl ${x.due_day})`,
+    fields: { name: 'Nama', amount: 'Nominal', due_day: 'Jatuh tempo (tgl)', category: 'Kategori', autodebit: 'Auto-debit', notes: 'Catatan' },
+    fmt: { amount: formatRp, autodebit: (v) => (v ? 'Ya' : 'Tidak') },
+  },
+  investments: {
+    label: 'Saham',
+    match: (x, k) => has(x.code, k) || has(x.name, k),
+    describe: (x) => `${x.code} — ${x.name} (${x.shares} lbr @ ${formatRp(x.buy_price)})`,
+    fields: { name: 'Nama', shares: 'Jumlah lembar', buy_price: 'Harga beli', buy_date: 'Tanggal beli', notes: 'Catatan' },
+    fmt: { buy_price: formatRp },
+  },
 };
 
-const calendarItemSchema = {
-  type: 'object',
-  properties: {
-    event: { type: 'string', description: 'Nama event ekonomi penting' },
-    country: { type: 'string', description: 'Kode negara: US, EUR, GBP, JPY, dll' },
-    time: { type: 'string', description: 'Waktu WIB daerah Bekasi, format: DD MMM YYYY HH:mm WIB' },
-    forecast: { type: 'string', description: 'Prediksi/ekspektasi nilai' },
-    previous: { type: 'string', description: 'Nilai sebelumnya' },
-    impact: { type: 'string', enum: ['HIGH', 'MEDIUM', 'LOW'], description: 'Dampak event ke pasar' },
-  },
-  required: ['event', 'country', 'time', 'forecast', 'previous', 'impact'],
-};
+// ─── UBAH DATA ───────────────────────────────────────────────────────────────
+/** Bangun patch dari params intent; kembalikan { patch, errors }. */
+function buildPatch(resource, p) {
+  const patch = {};
+  const errors = [];
+  const positive = (v, label) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) { errors.push(`${label} harus angka lebih dari 0.`); return undefined; }
+    return n;
+  };
+  const given = (v) => v !== undefined && v !== null && v !== '';
 
-const economicNewsTool = buildFunctionTool(
-  'report_economic_update',
-  'Laporkan hasil analisa ringkasan berita ekonomi global, kalender ekonomi, dan berita Indonesia. ' +
-  'Aturan wajib: field "summary" HARUS plain text tanpa markdown/link apapun; taruh URL sumber HANYA ' +
-  'di field "sourceUrl" yang terpisah; jangan ulangi berita yang sudah pernah dilaporkan sebelumnya; ' +
-  'tandai "hot":true HANYA untuk berita yang benar-benar luar biasa/jarang terjadi.',
-  {
+  if (resource === 'transactions') {
+    if (given(p.type)) { if (p.type === 'income' || p.type === 'expense') patch.type = p.type; else errors.push('Jenis harus pemasukan atau pengeluaran.'); }
+    if (given(p.amount)) { const n = positive(p.amount, 'Nominal'); if (n !== undefined) patch.amount = n; }
+    if (given(p.category)) patch.category = String(p.category).trim();
+    if (given(p.date)) { if (isValidDate(p.date)) patch.date = p.date; else errors.push('Tanggal harus format YYYY-MM-DD yang valid.'); }
+    if (p.description !== undefined && p.description !== null) patch.description = String(p.description).trim();
+  } else if (resource === 'budgets') {
+    if (given(p.amount)) { const n = positive(p.amount, 'Limit'); if (n !== undefined) patch.limit = n; }
+    if (given(p.newName)) patch.category = String(p.newName).trim();
+  } else if (resource === 'bills') {
+    if (given(p.newName)) patch.name = String(p.newName).trim();
+    if (given(p.amount)) { const n = positive(p.amount, 'Nominal'); if (n !== undefined) patch.amount = n; }
+    if (given(p.due_day)) { const n = Number(p.due_day); if (Number.isInteger(n) && n >= 1 && n <= 31) patch.due_day = n; else errors.push('Tanggal jatuh tempo harus 1–31.'); }
+    if (given(p.category)) patch.category = String(p.category).trim();
+    if (typeof p.autodebit === 'boolean') patch.autodebit = p.autodebit;
+    if (p.notes !== undefined && p.notes !== null) patch.notes = String(p.notes);
+  } else if (resource === 'investments') {
+    if (given(p.stockName)) patch.name = String(p.stockName).trim();
+    if (given(p.shares)) { const n = positive(p.shares, 'Jumlah lembar'); if (n !== undefined) patch.shares = n; }
+    if (given(p.buy_price)) { const n = positive(p.buy_price, 'Harga beli'); if (n !== undefined) patch.buy_price = n; }
+    if (given(p.buy_date)) { if (isValidDate(p.buy_date)) patch.buy_date = p.buy_date; else errors.push('Tanggal beli harus format YYYY-MM-DD yang valid.'); }
+    if (p.notes !== undefined && p.notes !== null) patch.notes = String(p.notes);
+  }
+  return { patch, errors };
+}
+
+/** Cari data target. Transaksi tanpa kata kunci = transaksi terbaru ("yang tadi"). */
+async function findTargets(resource, keyword) {
+  const all = await list(resource);
+  const arr = Array.isArray(all) ? all : [];
+  const k = String(keyword || '').trim().toLowerCase();
+  if (!k) {
+    if (resource !== 'transactions' || !arr.length) return [];
+    // tanggal terbaru; jika sama, yang paling akhir di daftar
+    return [arr.reduce((best, t) => (!best || String(t.date || '') >= String(best.date || '') ? t : best), null)];
+  }
+  return arr.filter((x) => RES[resource].match(x, k));
+}
+
+/** Tampilkan perubahan (sebelum → sesudah) dan minta konfirmasi !ya / !tidak. */
+async function askConfirmUpdate({ sender, reply, resource, target, patch }) {
+  const cfg = RES[resource];
+  const lines = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (String(target[k]) === String(v)) continue;
+    const f = cfg.fmt[k] || ((x) => x);
+    const before = target[k] === undefined || target[k] === null || target[k] === '' ? '-' : f(target[k]);
+    lines.push(`• ${cfg.fields[k] || k}: ${before} → *${f(v)}*`);
+  }
+  if (!lines.length) {
+    await reply('ℹ️ Tidak ada perubahan — nilai barunya sama dengan data sekarang.');
+    return;
+  }
+
+  setPending(sender, {
+    kind: 'finance',
+    run: async (say) => {
+      const { data } = await update(resource, target, patch);
+      const merged = { ...target, ...patch, ...(data && typeof data === 'object' && !Array.isArray(data) ? data : {}) };
+      await say(`✅ ${cfg.label} diperbarui:\n${cfg.describe(merged)}`);
+    },
+  });
+  await reply(
+    `✏️ Ubah ${cfg.label.toLowerCase()}:\n${cfg.describe(target)}\n\n${lines.join('\n')}\n\n` +
+    'Simpan? Balas *!ya* atau *!tidak* (berlaku 5 menit).'
+  );
+}
+
+async function doUpdate({ resource, params, sender, reply }) {
+  const cfg = RES[resource];
+  const { patch, errors } = buildPatch(resource, params);
+  if (errors.length) { await reply(`⚠️ ${errors.join('\n⚠️ ')}`); return; }
+  if (!Object.keys(patch).length) {
+    await reply('⚠️ Mau diubah jadi apa? Sebutkan nilai barunya, misal: "ubah pengeluaran kopi jadi 25rb".');
+    return;
+  }
+  if (!params.searchKeyword && resource !== 'transactions') {
+    await reply(`⚠️ Sebutkan ${cfg.label.toLowerCase()} mana yang ingin diubah.`);
+    return;
+  }
+
+  const matches = await findTargets(resource, params.searchKeyword);
+  if (!matches.length) {
+    await reply(params.searchKeyword
+      ? `❌ Tidak ada ${cfg.label.toLowerCase()} yang cocok dengan "*${params.searchKeyword}*".`
+      : `❌ Belum ada ${cfg.label.toLowerCase()} yang bisa diubah.`);
+    return;
+  }
+  if (matches.length === 1) {
+    await askConfirmUpdate({ sender, reply, resource, target: matches[0], patch });
+    return;
+  }
+
+  const shown = matches.slice(0, 10);
+  pendingConfirm.set(sender, {
+    mode: 'update',
+    resource,
+    patch,
+    candidates: shown.map((x) => ({ id: x.id, label: cfg.describe(x), current: x })),
+    expiresAt: Date.now() + 2 * 60 * 1000,
+  });
+  let msg = `🔍 Ditemukan *${matches.length}* ${cfg.label.toLowerCase()} cocok${matches.length > shown.length ? ` (menampilkan ${shown.length} pertama — sebut lebih spesifik jika tidak ada)` : ''}. Pilih yang mau diubah?\n\n`;
+  shown.forEach((x, i) => { msg += `*${i + 1}.* ${cfg.describe(x)}\n`; });
+  msg += '\nBalas dengan angka pilihanmu (berlaku 2 menit).';
+  await reply(msg);
+}
+
+// ─── CATAT BANYAK TRANSAKSI SEKALIGUS ────────────────────────────────────────
+async function doAddTransactions({ items, sender, reply }) {
+  const arr = Array.isArray(items) ? items : [];
+  if (!arr.length) {
+    await reply('⚠️ Sebutkan transaksinya. Contoh: "kopi 20rb, makan siang 35rb, parkir 5rb".');
+    return;
+  }
+  if (arr.length > 20) { await reply('⚠️ Maksimal 20 transaksi sekaligus.'); return; }
+
+  const today = todayDate();
+  const valid = [];
+  const problems = [];
+  arr.forEach((it, i) => {
+    const issues = [];
+    const type = it?.type === 'income' ? 'income' : it?.type === 'expense' ? 'expense' : null;
+    const amount = Number(it?.amount);
+    const category = typeof it?.category === 'string' ? it.category.trim() : '';
+    const date = it?.date ? String(it.date) : today;
+    if (!type) issues.push('jenis (pemasukan/pengeluaran) tidak jelas');
+    if (!Number.isFinite(amount) || amount <= 0) issues.push('nominal tidak valid');
+    if (!category) issues.push('kategori kosong');
+    if (!isValidDate(date)) issues.push('tanggal tidak valid');
+    if (issues.length) problems.push(`#${i + 1}: ${issues.join(', ')}`);
+    else valid.push({ type, amount, category, date, description: typeof it.description === 'string' ? it.description.trim() : '' });
+  });
+  if (problems.length) {
+    await reply(`⚠️ Ada data yang kurang/tidak valid — tidak ada yang disimpan:\n${problems.join('\n')}\n\nCoba sebutkan lagi lebih lengkap.`);
+    return;
+  }
+
+  const line = (t) => `${t.type === 'income' ? '➕' : '➖'} ${formatRp(t.amount)} [${t.category}]${t.description ? ` — ${t.description}` : ''} (${t.date})`;
+  const totalIn = valid.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const totalOut = valid.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+
+  setPending(sender, {
+    kind: 'finance',
+    run: async (say) => {
+      let ok = 0;
+      const failed = [];
+      for (let i = 0; i < valid.length; i += 1) {
+        try { await create('transactions', valid[i]); ok += 1; } catch (err) {
+          failed.push(`${line(valid[i])} — ${err.message}`);
+          if (err instanceof FinTrackError && err.status === 0) {
+            valid.slice(i + 1).forEach((t) => failed.push(`${line(t)} — tidak dikirim (FinTrack tidak terhubung)`));
+            break;
+          }
+        }
+      }
+      await say(`✅ ${ok}/${valid.length} transaksi tercatat.${failed.length ? `\n⚠️ Gagal:\n${failed.join('\n')}` : ''}`);
+    },
+  });
+  await reply(
+    `📝 Catat ${valid.length} transaksi:\n${valid.map((t, i) => `${i + 1}. ${line(t)}`).join('\n')}\n\n` +
+    `${totalOut ? `💸 Total pengeluaran: ${formatRp(totalOut)}\n` : ''}${totalIn ? `💰 Total pemasukan: ${formatRp(totalIn)}\n` : ''}` +
+    '\nSimpan semua? Balas *!ya* atau *!tidak* (berlaku 5 menit).'
+  );
+}
+
+// ─── BACA STRUK DARI FOTO ────────────────────────────────────────────────────
+async function doScanReceipt({ attachments, text, sender, reply }) {
+  const images = (attachments || []).filter((a) => String(a?.mime_type || '').startsWith('image/'));
+  if (!images.length) {
+    await reply('📷 Kirim foto struk/bukti transfer bersama pesannya, nanti saya baca dan catat.');
+    return;
+  }
+
+  let categories = [];
+  try {
+    const [tx, budgets] = await Promise.all([list('transactions'), list('budgets')]);
+    categories = [...new Set([...(budgets || []), ...(tx || [])].map((x) => x.category).filter(Boolean))].slice(0, 30);
+  } catch { /* kategori hanya pelengkap */ }
+
+  const caption = String(text || '').replace(/\[gambar dikirim\]/g, '').trim();
+  const r = await extractReceipt({ jid: sender, attachments: images, caption, categories, today: todayDate() });
+  if (!r) {
+    await reply('❌ Tidak bisa membaca nominal dari gambar itu. Coba foto yang lebih jelas, atau catat manual: "catat pengeluaran 25000 buat makan".');
+    return;
+  }
+
+  const tx = { type: r.type, amount: r.amount, category: r.category, date: r.date, description: r.description };
+  setPending(sender, {
+    kind: 'finance',
+    run: async (say) => {
+      const saved = await create('transactions', tx);
+      await say(`✅ Tercatat: ${formatRp(saved?.amount ?? tx.amount)} [${saved?.category ?? tx.category}] (${saved?.date ?? tx.date})`);
+    },
+  });
+  await reply(
+    `🧾 Hasil baca gambar:\n${tx.type === 'income' ? '💚 Pemasukan' : '🔴 Pengeluaran'}\n💰 ${formatRp(tx.amount)}\n📂 ${tx.category}\n📅 ${tx.date}` +
+    `${tx.description ? `\n📝 ${tx.description}` : ''}\n\nSudah benar? Balas *!ya* untuk menyimpan atau *!tidak* untuk batal (berlaku 5 menit).\n` +
+    '_Nominal/kategori salah? Balas !tidak lalu catat manual._'
+  );
+}
+
+
+export default {
+  intent: 'myFinance',
+
+  intentDefinition: `"myFinance" - owner ingin mengelola keuangan pribadi via FinTrack. Pilih SATU action: addTransaction (catat SATU transaksi), addTransactions (catat BEBERAPA transaksi sekaligus dari satu pesan, isi items), addBudget/addBill/addInvestment (tambah anggaran/tagihan rutin/saham), updateTransaction/updateBudget/updateBill/updateInvestment (UBAH data yang sudah ada, mis. "ubah kopi tadi jadi 25rb", "limit anggaran makan jadi 600rb"; searchKeyword = data yang dimaksud, field lain = nilai baru), deleteTransaction/deleteBudget/deleteBill/deleteInvestment (hapus), getSummary (laporan/ringkasan keuangan; isi period: today, yesterday, this_week, last_week, last_7_days, this_month, last_month, this_year, atau custom dengan date_from/date_to; kosongkan = bulan ini), scanReceipt (owner mengirim FOTO struk/bukti transfer/bukti belanja untuk dicatat), confirmDelete (owner menyebut angka/nomor sebagai pilihan dari daftar hasil pencarian hapus ATAU ubah sebelumnya — lihat riwayat percakapan).`,
+
+  // ─── Parameters (JSON Schema, format function-calling §9 API_USAGE.md) ─
+  // Catatan: hanya `action` yang wajib di level schema — field lain OPSIONAL
+  // di sini karena kebutuhannya berbeda per action (mis. addBill butuh
+  // due_day, addInvestment butuh shares/buy_price). Validasi field wajib
+  // per-action tetap dilakukan di handler() seperti sebelumnya.
+  parameters: {
     type: 'object',
     properties: {
-      datetime: { type: 'string', description: 'Tanggal & waktu sekarang di Bekasi, Indonesia, format: DD MMM YYYY HH:mm WIB' },
-      global: { type: 'array', items: newsItemSchema, description: '5 berita ekonomi global paling penting' },
-      economicCalendar: { type: 'array', items: calendarItemSchema, description: '5 event ekonomi penting (kosongkan array jika tidak ada)' },
-      indonesia: { type: 'array', items: newsItemSchema, description: '5 berita ekonomi Indonesia paling penting' },
+      action: {
+        type: 'string',
+        enum: [
+          'addTransaction', 'addTransactions', 'updateTransaction', 'deleteTransaction',
+          'addBudget', 'updateBudget', 'deleteBudget',
+          'addBill', 'updateBill', 'deleteBill',
+          'addInvestment', 'updateInvestment', 'deleteInvestment',
+          'getSummary', 'scanReceipt', 'confirmDelete',
+        ],
+        description: 'Jenis operasi keuangan yang diminta owner',
+      },
+      type: { type: 'string', enum: ['income', 'expense'], description: 'Untuk addTransaction; juga nilai baru jenis transaksi untuk updateTransaction' },
+      amount: { type: 'number', description: 'Nominal dalam Rupiah — untuk addTransaction, addBudget, addBill, addInvestment (harga beli per lembar); pada update* = nominal/limit BARU' },
+      category: { type: 'string', description: 'Kategori transaksi/anggaran/tagihan; pada updateTransaction/updateBill = kategori BARU; pada getSummary = filter kategori (opsional)' },
+      date: { type: 'string', description: 'Format YYYY-MM-DD, kosongkan jika tidak disebut; pada updateTransaction = tanggal BARU' },
+      description: { type: 'string', description: 'Keterangan transaksi — untuk addTransaction; pada updateTransaction = keterangan BARU' },
+      searchKeyword: { type: 'string', description: 'Kata kunci nama/deskripsi untuk mencari item — untuk delete* dan update*. Untuk updateTransaction kosongkan jika owner bilang "yang tadi/terakhir"' },
+      confirmIndex: { type: 'integer', description: 'Angka pilihan yang dipilih owner saat konfirmasi hapus/ubah — untuk confirmDelete' },
+      name: { type: 'string', description: 'Nama tagihan — untuk addBill' },
+      newName: { type: 'string', description: 'Nama/kategori BARU saat rename — untuk updateBudget (kategori) dan updateBill (nama)' },
+      due_day: { type: 'integer', minimum: 1, maximum: 31, description: 'Tanggal jatuh tempo 1-31 — untuk addBill, updateBill' },
+      autodebit: { type: 'boolean', description: 'Apakah auto-debit — untuk addBill, updateBill' },
+      notes: { type: 'string', description: 'Catatan — untuk addBill, addInvestment, updateBill, updateInvestment' },
+      code: { type: 'string', description: 'Kode saham IDX huruf kapital — untuk addInvestment' },
+      stockName: { type: 'string', description: 'Nama perusahaan saham — untuk addInvestment; pada updateInvestment = nama BARU' },
+      shares: { type: 'number', description: 'Jumlah lembar saham — untuk addInvestment, updateInvestment' },
+      buy_price: { type: 'number', description: 'Harga beli per lembar — untuk addInvestment, updateInvestment' },
+      buy_date: { type: 'string', description: 'Tanggal beli YYYY-MM-DD — untuk addInvestment, updateInvestment' },
+      period: {
+        type: 'string',
+        enum: ['today', 'yesterday', 'this_week', 'last_week', 'last_7_days', 'this_month', 'last_month', 'this_year', 'custom'],
+        description: 'Periode laporan — hanya untuk getSummary. Kosongkan = this_month',
+      },
+      date_from: { type: 'string', description: 'Awal periode YYYY-MM-DD — hanya untuk getSummary dengan period=custom' },
+      date_to: { type: 'string', description: 'Akhir periode YYYY-MM-DD — hanya untuk getSummary dengan period=custom' },
+      items: {
+        type: 'array',
+        maxItems: 20,
+        description: 'Daftar transaksi — hanya untuk addTransactions (beberapa transaksi dalam satu pesan)',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['income', 'expense'] },
+            amount: { type: 'number', description: 'Nominal Rupiah' },
+            category: { type: 'string' },
+            date: { type: 'string', description: 'YYYY-MM-DD, kosongkan jika tidak disebut' },
+            description: { type: 'string' },
+          },
+          required: ['type', 'amount', 'category'],
+        },
+      },
     },
-    required: ['datetime', 'global', 'indonesia'],
-  }
-);
+    required: ['action'],
+  },
 
-// ─── Format hasil tool → pesan WhatsApp ──────────────────────────────────
-/**
- * Ubah hasil report_economic_update dari AI menjadi teks siap kirim ke
- * WhatsApp. sourceUrl sudah berupa field terpisah — tidak perlu lagi
- * ekstraksi/pembersihan marker seperti versi lama.
- * @param {object} data - args dari tool_call report_economic_update
- * @returns {string}
- */
-function formatNewsMessage(data) {
-  const lines = [];
+  groupContextPrompt: `Kamu adalah asisten keuangan pribadi owner. Kamu memahami semua data keuangan owner: transaksi pemasukan dan pengeluaran, anggaran per kategori, tagihan rutin bulanan, dan portofolio investasi saham IDX. Bantu owner mencatat, mengelola, dan memahami kondisi keuangannya. Jawab ringkas dan pakai Bahasa Indonesia. Saat owner menyebut nominal uang, asumsikan dalam Rupiah.`,
 
-  lines.push(`📊 *Update Ekonomi*`);
-  lines.push(`🕐 ${data.datetime}`);
-  lines.push('');
+  name: 'MyFinance',
+  description: 'Manajemen keuangan pribadi via FinTrack API',
+  ownerOnly: true,
 
-  lines.push('🌍 *Global*');
-  for (const item of data.global) {
-    if (item.hot) {
-      lines.push(`🔥 *[HOTNEWS]* \`${item.headline}\``);
-      lines.push(`  *${item.summary}*`);
-    } else {
-      lines.push(`• *${item.headline}*`);
-      lines.push(`  ${item.summary}`);
+  handler: async ({ params, sender, reply, attachments, text }) => {
+    const { action } = params;
+
+    // [Fix myFinance "params: {}"] Guard eksplisit untuk kasus action
+    // hilang sama sekali (bukan sekadar di luar enum) — bisa terjadi jika
+    // model mengembalikan SEBAGIAN params (mis. cuma { amount: 20000 })
+    // tanpa field `action`. triggeredPluginHandler.js sudah menyaring kasus
+    // params BENAR-BENAR kosong {} (fallback ke AI chat), tapi kasus ini
+    // (params ada isinya tapi action-nya sendiri kosong) baru ketahuan di
+    // sini — beri pesan yang lebih actionable daripada "Aksi tidak dikenali"
+    // generik, dan log params mentah untuk diagnosa.
+    if (!action) {
+      logger.warn({ intent: 'myFinance', params }, '⚠️ myFinance: dipanggil tanpa field action sama sekali');
+      await reply(
+        '⚠️ Tidak bisa mendeteksi jenis aksi keuangan dari pesanmu.\n' +
+        'Coba lebih spesifik, misal:\n' +
+        '• "catat pengeluaran 20000 buat kopi"\n' +
+        '• "lihat laporan keuangan bulan ini"\n' +
+        '• "tambah anggaran makan 500rb"'
+      );
+      return;
     }
-    if (item.sourceUrl) {
-      lines.push(`  [🔗 Sumber](${item.sourceUrl})`);
-    }
-  }
 
-  lines.push('');
-
-  // ── Economic Calendar ──
-  if (Array.isArray(data.economicCalendar) && data.economicCalendar.length > 0) {
-    lines.push('📅 *Economic Calendar - Event Penting*');
-    for (const event of data.economicCalendar) {
-      const impactEmoji = event.impact === 'HIGH' ? '🔴' : event.impact === 'MEDIUM' ? '🟠' : '🟡';
-      lines.push(`${impactEmoji} *${event.event}* (${event.country})`);
-      lines.push(`  ⏰ ${event.time}`);
-      lines.push(`  📊 Forecast: ${event.forecast} | Prior: ${event.previous}`);
-    }
-    lines.push('');
-  }
-
-  lines.push('🇮🇩 *Indonesia*');
-  for (const item of data.indonesia) {
-    if (item.hot) {
-      lines.push(`🔥 *[HOTNEWS]* \`${item.headline}\``);
-      lines.push(`  *${item.summary}*`);
-    } else {
-      lines.push(`• *${item.headline}*`);
-      lines.push(`  ${item.summary}`);
-    }
-    if (item.sourceUrl) {
-      lines.push(`  [🔗 Sumber](${item.sourceUrl})`);
-    }
-  }
-
-  lines.push('');
-  lines.push('_Sumber: analisis AI berdasarkan data terkini_');
-
-  return lines.join('\n');
-}
-
-// ─── Handler utama ────────────────────────────────────────────────────────
-async function sendEconomicNews() {
-  logger.info('📰 Menjalankan scheduled economic news...');
-
-  // ─── Langkah 1: Grok riset & tulis berita sebagai JSON ────────────────
-  // Manfaatkan akses real-time X/Twitter bawaan Grok. Output diparse di
-  // client (askAIJson sudah retry internal dengan peringatan format).
-  const research = await askAIJson({
-    jid: 'scheduled:economicNews',
-    userText: 'Berikan update berita ekonomi sekarang. Note: dengan data terupdate dari sumber utama yaitu tiktok, instagram, x.com, dan sumber berita online lainnya. Jangan berikan berita yang sudah pernah kamu berikan sebelumnya.',
-    systemPrompt: GROK_RESEARCH_INSTRUCTIONS,
-    model: config.ai.newsModel,
-  });
-
-  if (!research || typeof research !== 'object') {
-    logger.error('❌ Grok tidak menghasilkan JSON berita valid setelah retry, skip');
-    return;
-  }
-
-  // ─── Langkah 2: Qwen validasi & strukturkan via tool-calling ──────────
-  // Skema tool report_economic_update dipertahankan dari era DeepSeek —
-  // Qwen mengoreksi/melengkapi hasil riset Grok (mis. sourceUrl yang
-  // hilang/tidak valid) dan bentuk akhirnya dijamin gateway, bukan regex.
-  let result;
-  try {
-    result = await askAITool({
-      jid: 'scheduled:economicNews',
-      userText:
-        'Berikut hasil riset berita ekonomi terkini dari sumber lain. Validasi, koreksi bila perlu, lengkapi field yang kurang ' +
-        '(mis. sourceUrl yang hilang), lalu laporkan via fungsi yang tersedia. Pertahankan berita yang sudah valid apa adanya.\n\n' +
-        JSON.stringify(research),
-      systemPrompt: NEWS_INSTRUCTIONS,
-      tools: [economicNewsTool],
-      thinkMode: 'thinking',
-      model: config.ai.newsModel,
-    });
-  } catch (err) {
-    logger.error({ err: err.message }, '❌ Gagal menstrukturkan berita dari hasil riset Grok');
-    return;
-  }
-
-  // Retry sekali jika AI tidak memanggil tool (jarang terjadi dengan
-  // tool-calling, tapi tetap dijaga sebagai fallback)
-  if (result.name !== 'report_economic_update') {
-    logger.warn({ preview: result.raw?.slice(0, 100) }, '⚠️ AI tidak memanggil fungsi report_economic_update, retry sekali...');
     try {
-      result = await askAITool({
-        jid: 'scheduled:economicNews',
-        userText: 'PERINTAH ULANG: kamu WAJIB memanggil fungsi "report_economic_update" dengan hasil analisa berita ekonomi terkini. Jangan hanya menulis teks biasa.\n\n' + JSON.stringify(research),
-        systemPrompt: NEWS_INSTRUCTIONS,
-        tools: [economicNewsTool],
-        thinkMode: 'thinking',
-        model: config.ai.newsModel,
-      });
+      // ── confirmDelete ──────────────────────────────────────────────────────
+      if (action === 'confirmDelete') {
+        const pending = pendingConfirm.get(sender);
+        if (!pending || Date.now() > pending.expiresAt) {
+          pendingConfirm.delete(sender);
+          await reply('⏰ Tidak ada konfirmasi (hapus/ubah) yang aktif atau sudah kedaluwarsa.');
+          return;
+        }
+
+        const idx = Number(params.confirmIndex) - 1;
+        if (isNaN(idx) || idx < 0 || idx >= pending.candidates.length) {
+          await reply(`❓ Pilihan tidak valid. Ketik angka 1–${pending.candidates.length}.`);
+          return;
+        }
+
+        const target = pending.candidates[idx];
+        pendingConfirm.delete(sender);
+
+        if (pending.mode === 'update') {
+          await askConfirmUpdate({ sender, reply, resource: pending.resource, target: target.current, patch: pending.patch });
+          return;
+        }
+
+        await ft('DELETE', `${pending.endpoint}/${target.id}`);
+        await reply(`🗑️ Berhasil dihapus:\n*${target.label}*`);
+        return;
+      }
+
+      // ── getSummary ─────────────────────────────────────────────────────────
+      // Laporan berperiode (hari ini … tahun ini / custom) — logika di services/finTrackReport.js
+      if (action === 'getSummary') {
+        const summary = await ft('GET', '/ext/summary');
+        logger.info({ summaryKeys: Object.keys(summary || {}), period: params.period }, '📦 myFinance: summary response keys');
+
+        const arr = (v) => (Array.isArray(v) ? v : []);
+        const data = {
+          transactions: arr(summary?.transactions),
+          budgets: arr(summary?.budgets),
+          bills: arr(summary?.bills),
+          investments: arr(summary?.investments),
+        };
+        const period = resolvePeriod(params, todayDate());
+        await reply(buildReport(data, period, { category: params.category, today: todayDate() }));
+        return;
+      }
+
+      // ── addTransaction ─────────────────────────────────────────────────────
+      if (action === 'addTransaction') {
+        const { type, amount, category, date, description } = params;
+
+        if (!type || !amount || !category) {
+          await reply('⚠️ Kurang info. Sebutkan: jenis (pemasukan/pengeluaran), jumlah, dan kategori.');
+          return;
+        }
+
+        const tx = await ft('POST', '/ext/transactions', {
+          type,
+          amount: Number(amount),
+          category,
+          date: date || todayDate(),
+          description: description || '',
+        });
+
+        const icon = type === 'income' ? '💚 Pemasukan' : '🔴 Pengeluaran';
+        await reply(
+          `✅ *${icon} dicatat!*\n` +
+          `💰 ${formatRp(tx.amount)}\n` +
+          `📂 ${tx.category}\n` +
+          `📅 ${tx.date}` +
+          (tx.description ? `\n📝 ${tx.description}` : '')
+        );
+        return;
+      }
+
+      // ── deleteTransaction ──────────────────────────────────────────────────
+      if (action === 'deleteTransaction') {
+        const { searchKeyword } = params;
+        if (!searchKeyword) {
+          await reply('⚠️ Sebutkan transaksi mana yang ingin dihapus (deskripsi atau kategori).');
+          return;
+        }
+
+        const transactions = await ft('GET', '/ext/transactions');
+        const keyword = searchKeyword.toLowerCase();
+        const matches = transactions.filter(t =>
+          t.description?.toLowerCase().includes(keyword) ||
+          t.category?.toLowerCase().includes(keyword)
+        );
+
+        if (matches.length === 0) {
+          await reply(`❌ Tidak ada transaksi yang cocok dengan kata kunci "*${searchKeyword}*".`);
+          return;
+        }
+
+        if (matches.length === 1) {
+          await ft('DELETE', `/ext/transactions/${matches[0].id}`);
+          const t = matches[0];
+          await reply(
+            `🗑️ Transaksi dihapus:\n` +
+            `${formatRp(t.amount)} [${t.category}] — ${t.description || '-'} (${t.date})`
+          );
+          return;
+        }
+
+        // Lebih dari 1 — minta konfirmasi
+        pendingConfirm.set(sender, {
+          endpoint: '/ext/transactions',
+          candidates: matches.map(t => ({
+            id: t.id,
+            label: `${formatRp(t.amount)} [${t.category}] — ${t.description || '-'} (${t.date})`,
+          })),
+          expiresAt: Date.now() + 2 * 60 * 1000, // 2 menit
+        });
+
+        let msg = `🔍 Ditemukan *${matches.length}* transaksi cocok. Pilih yang mana?\n\n`;
+        matches.forEach((t, i) => {
+          msg += `*${i + 1}.* ${formatRp(t.amount)} [${t.category}] — ${t.description || '-'} (${t.date})\n`;
+        });
+        msg += `\nBalas dengan angka pilihanmu (berlaku 2 menit).`;
+        await reply(msg);
+        return;
+      }
+
+      // ── addBudget ──────────────────────────────────────────────────────────
+      if (action === 'addBudget') {
+        const { category, amount } = params;
+        if (!category || !amount) {
+          await reply('⚠️ Sebutkan kategori dan nominal anggaran.');
+          return;
+        }
+
+        const budget = await ft('POST', '/ext/budgets', {
+          category,
+          limit: Number(amount),
+        });
+
+        await reply(
+          `✅ *Anggaran ditambahkan!*\n` +
+          `📂 ${budget.category}\n` +
+          `🎯 Limit: ${formatRp(budget.limit)}/bulan`
+        );
+        return;
+      }
+
+      // ── deleteBudget ───────────────────────────────────────────────────────
+      if (action === 'deleteBudget') {
+        const { searchKeyword } = params;
+        if (!searchKeyword) {
+          await reply('⚠️ Sebutkan kategori anggaran yang ingin dihapus.');
+          return;
+        }
+
+        const budgets = await ft('GET', '/ext/budgets');
+        const keyword = searchKeyword.toLowerCase();
+        const matches = budgets.filter(b => b.category?.toLowerCase().includes(keyword));
+
+        if (matches.length === 0) {
+          await reply(`❌ Tidak ada anggaran untuk kategori "*${searchKeyword}*".`);
+          return;
+        }
+
+        if (matches.length === 1) {
+          await ft('DELETE', `/ext/budgets/${matches[0].id}`);
+          await reply(`🗑️ Anggaran *${matches[0].category}* (${formatRp(matches[0].limit)}/bln) dihapus.`);
+          return;
+        }
+
+        pendingConfirm.set(sender, {
+          endpoint: '/ext/budgets',
+          candidates: matches.map(b => ({
+            id: b.id,
+            label: `${b.category} — limit ${formatRp(b.limit)}/bln`,
+          })),
+          expiresAt: Date.now() + 2 * 60 * 1000,
+        });
+
+        let msg = `🔍 Ditemukan *${matches.length}* anggaran. Pilih yang mana?\n\n`;
+        matches.forEach((b, i) => {
+          msg += `*${i + 1}.* ${b.category} — limit ${formatRp(b.limit)}/bln\n`;
+        });
+        msg += `\nBalas dengan angka pilihanmu (berlaku 2 menit).`;
+        await reply(msg);
+        return;
+      }
+
+      // ── addBill ────────────────────────────────────────────────────────────
+      if (action === 'addBill') {
+        const { name, amount, due_day, category, autodebit, notes } = params;
+        if (!name || !amount || !due_day || !category) {
+          await reply('⚠️ Kurang info. Sebutkan: nama tagihan, nominal, tanggal jatuh tempo, dan kategori.');
+          return;
+        }
+
+        const bill = await ft('POST', '/ext/bills', {
+          name,
+          amount: Number(amount),
+          due_day: Number(due_day),
+          category,
+          autodebit: autodebit ?? false,
+          notes: notes || '',
+        });
+
+        await reply(
+          `✅ *Tagihan rutin ditambahkan!*\n` +
+          `🧾 ${bill.name}\n` +
+          `💰 ${formatRp(bill.amount)}/bln\n` +
+          `📅 Jatuh tempo: tgl ${bill.due_day}\n` +
+          `📂 ${bill.category}` +
+          (bill.autodebit ? '\n🔄 Auto-debit aktif' : '')
+        );
+        return;
+      }
+
+      // ── deleteBill ─────────────────────────────────────────────────────────
+      if (action === 'deleteBill') {
+        const { searchKeyword } = params;
+        if (!searchKeyword) {
+          await reply('⚠️ Sebutkan nama tagihan yang ingin dihapus.');
+          return;
+        }
+
+        const bills = await ft('GET', '/ext/bills');
+        const keyword = searchKeyword.toLowerCase();
+        const matches = bills.filter(b => b.name?.toLowerCase().includes(keyword));
+
+        if (matches.length === 0) {
+          await reply(`❌ Tidak ada tagihan bernama "*${searchKeyword}*".`);
+          return;
+        }
+
+        if (matches.length === 1) {
+          await ft('DELETE', `/ext/bills/${matches[0].id}`);
+          await reply(`🗑️ Tagihan *${matches[0].name}* (${formatRp(matches[0].amount)}/bln) dihapus.`);
+          return;
+        }
+
+        pendingConfirm.set(sender, {
+          endpoint: '/ext/bills',
+          candidates: matches.map(b => ({
+            id: b.id,
+            label: `${b.name} — ${formatRp(b.amount)}/bln (tgl ${b.due_day})`,
+          })),
+          expiresAt: Date.now() + 2 * 60 * 1000,
+        });
+
+        let msg = `🔍 Ditemukan *${matches.length}* tagihan. Pilih yang mana?\n\n`;
+        matches.forEach((b, i) => {
+          msg += `*${i + 1}.* ${b.name} — ${formatRp(b.amount)}/bln (tgl ${b.due_day})\n`;
+        });
+        msg += `\nBalas dengan angka pilihanmu (berlaku 2 menit).`;
+        await reply(msg);
+        return;
+      }
+
+      // ── addInvestment ──────────────────────────────────────────────────────
+      if (action === 'addInvestment') {
+        const { code, stockName, shares, buy_price, buy_date, notes } = params;
+        if (!code || !stockName || !shares || !buy_price || !buy_date) {
+          await reply('⚠️ Kurang info. Sebutkan: kode saham, nama perusahaan, jumlah lembar, harga beli per lembar, dan tanggal beli.');
+          return;
+        }
+
+        const inv = await ft('POST', '/ext/investments', {
+          code: String(code).toUpperCase(),
+          name: stockName,
+          shares: Number(shares),
+          buy_price: Number(buy_price),
+          buy_date,
+          notes: notes || '',
+        });
+
+        const totalCost = inv.shares * inv.buy_price;
+        await reply(
+          `✅ *Saham ditambahkan ke portofolio!*\n` +
+          `📈 ${inv.code} — ${inv.name}\n` +
+          `📦 ${inv.shares} lembar @ ${formatRp(inv.buy_price)}\n` +
+          `💰 Total modal: ${formatRp(totalCost)}\n` +
+          `📅 Tanggal beli: ${inv.buy_date}`
+        );
+        return;
+      }
+
+      // ── deleteInvestment ───────────────────────────────────────────────────
+      if (action === 'deleteInvestment') {
+        const { searchKeyword } = params;
+        if (!searchKeyword) {
+          await reply('⚠️ Sebutkan kode saham atau nama perusahaan yang ingin dihapus.');
+          return;
+        }
+
+        const investments = await ft('GET', '/ext/investments');
+        const keyword = searchKeyword.toLowerCase();
+        const matches = investments.filter(i =>
+          i.code?.toLowerCase().includes(keyword) ||
+          i.name?.toLowerCase().includes(keyword)
+        );
+
+        if (matches.length === 0) {
+          await reply(`❌ Tidak ada saham cocok dengan "*${searchKeyword}*" di portofolio.`);
+          return;
+        }
+
+        if (matches.length === 1) {
+          await ft('DELETE', `/ext/investments/${matches[0].id}`);
+          await reply(`🗑️ Saham *${matches[0].code}* (${matches[0].name}) dihapus dari portofolio.`);
+          return;
+        }
+
+        pendingConfirm.set(sender, {
+          endpoint: '/ext/investments',
+          candidates: matches.map(i => ({
+            id: i.id,
+            label: `${i.code} — ${i.name} (${i.shares} lbr @ ${formatRp(i.buy_price)})`,
+          })),
+          expiresAt: Date.now() + 2 * 60 * 1000,
+        });
+
+        let msg = `🔍 Ditemukan *${matches.length}* saham. Pilih yang mana?\n\n`;
+        matches.forEach((i, idx) => {
+          msg += `*${idx + 1}.* ${i.code} — ${i.name} (${i.shares} lbr @ ${formatRp(i.buy_price)})\n`;
+        });
+        msg += `\nBalas dengan angka pilihanmu (berlaku 2 menit).`;
+        await reply(msg);
+        return;
+      }
+
+      // ── update* (ubah data yang sudah ada) ─────────────────────────────────
+      const updateResources = { updateTransaction: 'transactions', updateBudget: 'budgets', updateBill: 'bills', updateInvestment: 'investments' };
+      if (updateResources[action]) {
+        await doUpdate({ resource: updateResources[action], params, sender, reply });
+        return;
+      }
+
+      // ── addTransactions (banyak sekaligus) ─────────────────────────────────
+      if (action === 'addTransactions') {
+        await doAddTransactions({ items: params.items, sender, reply });
+        return;
+      }
+
+      // ── scanReceipt (foto struk) ───────────────────────────────────────────
+      if (action === 'scanReceipt') {
+        await doScanReceipt({ attachments, text, sender, reply });
+        return;
+      }
+
+      // ── unknown action ─────────────────────────────────────────────────────
+      // ── unknown action ──────────────────────────────────────────────
+      // [Fix Bug 2 & 3] Log action mentah + full params saat model (browser-
+      // automation scraper Qwen, bukan function-calling API tervalidasi —
+      // `enum` di schema TIDAK dijamin server) mengembalikan value di luar
+      // enum yang diharapkan. Sebelumnya tidak ada logging di sini, sehingga
+      // sulit diagnosa apakah ini murni salah model atau drift enum.
+      logger.warn({ intent: 'myFinance', action, params }, '⚠️ myFinance: action tidak dikenali/di luar enum');
+      await reply('⚠️ Aksi tidak dikenali. Coba ulangi dengan kalimat yang lebih jelas.');
+
     } catch (err) {
-      logger.error({ err: err.message }, '❌ Gagal ambil berita ekonomi dari AI (retry)');
-      return;
-    }
-    if (result.name !== 'report_economic_update') {
-      logger.error('❌ AI tetap tidak memanggil fungsi setelah retry, skip');
-      return;
-    }
-  }
+      logger.error({ intent: 'myFinance', action, err: err.message }, 'Error di plugin myFinance');
 
-  const newsData = result.args;
-
-  // Validasi field wajib
-  if (!newsData.datetime || !Array.isArray(newsData.global) || !Array.isArray(newsData.indonesia)) {
-    logger.error({ newsData }, '❌ Struktur hasil berita tidak valid');
-    return;
-  }
-
-  // Validasi jumlah item (minimal 5 untuk global & indonesia)
-  if (newsData.global.length < 5 || newsData.indonesia.length < 5) {
-    logger.warn({
-      globalCount: newsData.global.length,
-      indonesiaCount: newsData.indonesia.length,
-    }, '⚠️ Jumlah berita kurang dari 5, lanjutkan saja');
-  }
-
-  // economicCalendar opsional tapi jika ada harus array
-  if (newsData.economicCalendar && !Array.isArray(newsData.economicCalendar)) {
-    logger.warn('⚠️ economicCalendar bukan array, abaikan');
-    newsData.economicCalendar = [];
-  }
-
-  // Format menjadi pesan WhatsApp
-  const message = formatNewsMessage(newsData);
-
-  // ─ Kirim ke grup tertaut atau fallback ke owner ─────────────────────
-  const targetGroups = getGroupOutput('economicNews');
-
-  if (targetGroups.length > 0) {
-    logger.info({ groups: targetGroups.length }, '📤 Kirim berita ke grup tertaut');
-    for (const groupJid of targetGroups) {
-      try {
-        await global._sock?.sendMessage(groupJid, { text: message });
-        logger.info({ groupJid }, '✅ Berita terkirim ke grup');
-      } catch (err) {
-        logger.error({ groupJid, err: err.message }, '❌ Gagal kirim berita ke grup');
+      if (err instanceof FinTrackError && err.status === 0) {
+        await reply(`❌ FinTrack tidak bisa dihubungi: ${err.message}`);
+      } else if (err.message?.includes('Database tidak terhubung') || err.message?.includes('500')) {
+        await reply('❌ FinTrack tidak bisa diakses sekarang. Pastikan `database.py` sedang berjalan di Windows.');
+      } else {
+        await reply(`❌ Gagal: ${err.message}`);
       }
     }
-  } else {
-    const ownerJid = config.ownerLid || config.ownerJid;
-    if (!ownerJid) {
-      logger.warn('⚠️ Tidak ada grup tertaut dan owner JID tidak diset, skip kirim berita');
-      return;
-    }
-    try {
-      await global._sock?.sendMessage(ownerJid, { text: message });
-      logger.info({ ownerJid }, '✅ Berita terkirim ke owner (tidak ada grup tertaut)');
-    } catch (err) {
-      logger.error({ err: err.message }, '❌ Gagal kirim berita ke owner');
-    }
-  }
-}
-
-// ─── Plugin export ────────────────────────────────────────────────────────
-export default {
-  name: 'EconomicNews',
-  description: 'Kirim ringkasan berita ekonomi global dan Indonesia setiap 4 jam via AI (tool-calling)',
-
-  crons: [
-    {
-      name: 'scheduled:economicNews',
-      expr: '@every_4h',
-      handler: sendEconomicNews,
-      runOnStart: false,
-    },
-  ],
+  },
 };

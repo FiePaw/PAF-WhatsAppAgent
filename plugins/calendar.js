@@ -1,4 +1,5 @@
 // plugins/calendar.js — command plugin MyCalendar: !jadwal, !agenda, !kuliah, !berita, !ya, !tidak
+// Catatan: !ya/!tidak juga dipakai plugin lain lewat calendarPending (entry { kind, run }), mis. myFinance.
 import * as cal from '../services/calendarClient.js';
 import {
   addDays, formatAgenda, newsLine, shortId, summarizeWarnings, todayStr,
@@ -72,6 +73,9 @@ async function confirmYes(reply, sender) {
   } else if (p.kind === 'delete') {
     await cal.deleteEvent(p.id);
     await reply(`🗑️ Dihapus: ${p.title}`);
+  } else if (typeof p.run === 'function') {
+    // Konfirmasi dari plugin lain (mis. myFinance: ubah data, catat banyak transaksi, baca struk)
+    await p.run(reply);
   }
 }
 

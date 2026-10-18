@@ -33,6 +33,7 @@ const config = {
   // Nilai HARUS sesuai regex gateway: ^(deepseek|qwen|grok)(?:\(([^)]+)\))?$
   ai: {
     baseUrl: process.env.AI_API_URL || '',
+    apiKey: process.env.AI_API_KEY || process.env.PAF_API_TOKEN || '',
     chatModel: process.env.AI_CHAT_MODEL || 'qwen',
     taskModel: process.env.AI_TASK_MODEL || 'grok',
     intentModel: process.env.AI_INTENT_MODEL || 'deepseek',

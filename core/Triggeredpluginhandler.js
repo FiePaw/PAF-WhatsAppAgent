@@ -10,7 +10,12 @@
 //   4. Reply dari plugin di-intercept → dikirim ke chat session sebagai konteks sistem
 //      agar chat session punya pemahaman yang sama dengan hasil eksekusi plugin
 //      → tidak ada missed context antara intent session dan chat session
-//   5. tidak ada tool dipanggil → return false (fallback ke AI chat biasa)
+//   5. tidak ada tool dipanggil → tidak ada task (bot hanya kirim balasan chat session)
+//
+// [Paralel] Deteksi (detectTriggeredIntent) & eksekusi (executeTriggeredPlugin)
+// dipisah. messageHandler menjalankan intent session & chat session BERSAMAAN,
+// lalu memutuskan: tanpa task → kirim chat saja; ada task → kirim chat, lalu
+// jalankan task.
 //
 // Setiap triggered plugin wajib export:
 //   intent: string             — nama intent yang ditangani (jadi nama function/tool)
@@ -155,56 +160,65 @@ export function getIntentToolSchemas() {
   return tools;
 }
 
-// ─── Main handler ─────────────────────────────────────────────────────────
+// ─── Tahap 1: deteksi intent (TANPA eksekusi) ─────────────────────────────
 /**
- * Coba jalankan triggered plugin berdasarkan intent dari session persisten sender.
- * Reply dari plugin di-intercept dan dikirim ke chat session sebagai konteks sistem
- * agar chat session memahami hasil eksekusi plugin — mencegah missed context.
+ * Kirim teks ke intent session dan kembalikan task yang terdeteksi, TANPA
+ * menjalankan plugin. Dipakai messageHandler agar intent session & chat
+ * session bisa berjalan PARALEL — bot yang memutuskan setelah keduanya
+ * selesai (ada task atau tidak).
  *
- * @param {object} ctx - { sock, msg, jid, sender, isOwner, text, reply, attachments? }
- * @returns {Promise<boolean>} true jika triggered plugin dijalankan, false jika tidak ada intent
+ * @param {object} ctx - { sender, text, attachments? }
+ * @returns {Promise<{ intent: string, params: object, plugin: object }|null>}
+ *          null jika tidak ada task yang valid
  */
-export async function handleTriggeredPlugin(ctx) {
-  const { sender, jid, text, attachments } = ctx;
+export async function detectTriggeredIntent(ctx) {
+  const { sender, text, attachments } = ctx;
 
   logger.debug({ text: text.slice(0, 60), hasAttachment: !!attachments }, '🔍 Kirim ke intent session...');
 
-  // Gunakan sender sebagai key session — bukan jid chat (agar DM dan grup tetap satu session per sender)
-  // Teruskan attachments agar Qwen bisa analisis gambar untuk deteksi intent
+  // Session key = sender (DM & grup tetap satu intent session per sender)
   const { intent, params } = await detectIntentWithSession(sender, text, attachments);
 
   if (!intent) {
-    logger.debug({ sender: sender.split('@')[0] }, 'Intent null — fallback ke AI chat');
-    return false;
+    logger.debug({ sender: sender.split('@')[0] }, 'Intent null — tidak ada task');
+    return null;
   }
 
   const plugin = triggeredPlugins.get(intent.toLowerCase());
-
   if (!plugin) {
     logger.warn({ intent }, 'Intent terdeteksi tapi tidak ada triggered plugin untuk menangani');
-    return false;
+    return null;
   }
 
-  // [Fix myFinance "params: {}"] Model (browser-automation scraper Qwen,
-  // bukan function-calling API tervalidasi) kadang memanggil tool tapi
-  // GAGAL mengekstrak parameter apapun — args kosong total {}. Ini bukan
-  // sinyal intent yang bisa diandalkan (setiap triggered plugin butuh
-  // minimal satu parameter nyata untuk bisa berbuat sesuatu), jadi alih-
-  // alih meneruskan ke plugin (yang pasti akan gagal validasi & membalas
-  // pesan error generik seperti "Aksi tidak dikenali" yang membingungkan
-  // user), treat sebagai "tidak ada aksi terdeteksi" dan fallback ke AI
-  // chat biasa — sama seperti saat intent null sama sekali.
+  // Model kadang memanggil tool tapi gagal ekstrak parameter (args {}).
+  // Bukan sinyal yang bisa diandalkan → anggap tidak ada task.
   if (!params || Object.keys(params).length === 0) {
     logger.warn(
       { intent, sender: sender.split('@')[0] },
-      '⚠️ Intent terdeteksi tapi params kosong total (model gagal ekstrak parameter) — fallback ke AI chat'
+      '⚠️ Intent terdeteksi tapi params kosong total — dianggap tidak ada task'
     );
-    return false;
+    return null;
   }
+
+  return { intent, params, plugin };
+}
+
+// ─── Tahap 2: eksekusi task hasil deteksi ─────────────────────────────────
+/**
+ * Jalankan triggered plugin dari hasil detectTriggeredIntent(). Dipanggil
+ * bot SETELAH balasan chat session terkirim. Reply plugin di-intercept dan
+ * di-inject ke chat session sebagai konteks agar tidak ada missed context.
+ *
+ * @param {object} ctx - { sock, msg, jid, sender, isOwner, text, reply, attachments? }
+ * @param {{ intent: string, params: object, plugin: object }} detected
+ * @returns {Promise<void>}
+ */
+export async function executeTriggeredPlugin(ctx, detected) {
+  const { jid, sender } = ctx;
+  const { intent, params, plugin } = detected;
 
   logger.info({ intent, params, sender: sender.split('@')[0] }, '⚡ Triggered plugin dijalankan');
 
-  // ── Intercept reply dari plugin ──────────────────────────────────────────
   let capturedReply = null;
   const interceptedReply = async (replyText) => {
     capturedReply = replyText;
@@ -216,10 +230,10 @@ export async function handleTriggeredPlugin(ctx) {
   } catch (err) {
     logger.error({ intent, err: err.message }, 'Error di triggered plugin handler');
     await ctx.reply('⚠️ Gagal menjalankan aksi. Coba lagi atau cek log.');
-    return true;
+    return;
   }
 
-  // ── Inject hasil plugin ke chat session ─────────────────────────────────
+  // Inject hasil plugin ke chat session
   if (capturedReply) {
     const systemContext = `[SYSTEM] Aksi intent "${intent}" telah dieksekusi. Hasilnya: ${capturedReply}`;
     askAI({
@@ -231,6 +245,18 @@ export async function handleTriggeredPlugin(ctx) {
     });
     logger.debug({ intent, jid }, '📨 Hasil plugin di-inject ke chat session');
   }
+}
 
+// ─── Wrapper sequential (backward-compat) ─────────────────────────────────
+/**
+ * Deteksi lalu langsung eksekusi (alur lama, sequential). Tidak lagi dipakai
+ * messageHandler — dipertahankan untuk kompatibilitas.
+ *
+ * @returns {Promise<boolean>} true jika task dijalankan
+ */
+export async function handleTriggeredPlugin(ctx) {
+  const detected = await detectTriggeredIntent(ctx);
+  if (!detected) return false;
+  await executeTriggeredPlugin(ctx, detected);
   return true;
 }
