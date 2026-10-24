@@ -42,11 +42,12 @@ import axios from 'axios';
 import config from '../config/config.js';
 import { extractToolCall } from '../utils/toolCalling.js';
 import { getPreciseTimeString } from './contextEnricher.js';
+import { deleteRemoteSession } from './aiService.js';
 import logger from '../utils/logger.js';
 
 const client = axios.create({
   baseURL: config.ai.baseUrl,
-  timeout: 120_000, // 120 detik (sesuai rekomendasi API untuk task chat/web_search)
+  timeout: 330_000, // 330 detik (sesuai PAF_REQUEST_TIMEOUT di API_USAGE.md §12)
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -236,6 +237,10 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
     // Sertakan attachment gambar jika ada
     if (Array.isArray(attachments) && attachments.length > 0) {
       body.attachments = attachments;
+      // DeepSeek butuh model_tab "vision" untuk menerima gambar (API_USAGE.md §8)
+      if (config.ai.intentModel?.startsWith('deepseek')) {
+        body.model_tab = 'vision';
+      }
       logger.debug({ senderJid, attachmentCount: attachments.length }, '🖼️ Intent session: kirim dengan attachment');
     }
 
@@ -274,7 +279,11 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
     // Jadi untuk error apapun, kita coba reinit sekali sebagai fallback.
     if (!isRetry) {
       logger.warn({ senderJid, status, err: err.message }, '⚠️ Intent session error, coba reinit sekali...');
+      const oldSessionId = _store.get(senderJid);
       _store.delete(senderJid);
+      if (oldSessionId) {
+        deleteRemoteSession(oldSessionId).catch(() => {});
+      }
       resetSystemPromptCache();
       const newSessionId = await initIntentSession(senderJid);
       if (!newSessionId) return { intent: null, params: {} };
@@ -288,8 +297,12 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
 
 // ─── Hapus intent session untuk sender ──────────────────────────────────
 export function deleteIntentSession(senderJid) {
+  const oldSessionId = _store.get(senderJid);
   _store.delete(senderJid);
-  logger.debug({ senderJid }, 'Intent session dihapus dari store');
+  if (oldSessionId) {
+    deleteRemoteSession(oldSessionId).catch(() => {});
+  }
+  logger.debug({ senderJid }, 'Intent session dihapus dari store & server');
 }
 
 // ─── List semua intent session aktif ────────────────────────────────────

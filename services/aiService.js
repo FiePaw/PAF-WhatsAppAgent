@@ -9,9 +9,8 @@
 //                khusus, Qwen tidak perlu apa-apa untuk terima gambar)
 //   - deepseek → dipakai untuk intent detection & task background berbasis
 //                tool-calling (botBrain, memoryService, approval, dll)
-//   - grok     → chat-only v1: tanpa tools/task_type/think_mode (lihat
-//                API_USAGE.md §7/§9/§14). Dipakai plugin economicNews via
-//                askAIJson() — pola raw-JSON + parser tahan banting.
+//   - grok     → didukung untuk chat dan tool-calling universal (§9 API_USAGE.md).
+//                Dipakai plugin economicNews via askAITool() & task background.
 //
 // ─── Perubahan penting per revisi API_USAGE.md terbaru ───────────────────
 //   1. Sesi TIDAK PUNYA TTL otomatis di server lagi (§6.2.1) — sesi hidup
@@ -341,7 +340,10 @@ export async function askAI({ jid, userText, systemPrompt, thinkMode, attachment
       }
       return '🔐 Sesi AI tidak valid (perlu login ulang di worker), coba lagi nanti.';
     }
-    if (status === 404) return '🔄 Sesi AI tidak ditemukan, coba kirim pesanmu sekali lagi.';
+    if (status === 404) {
+      sessionStore.delete(jid);
+      return '🔄 Sesi AI tidak ditemukan (sesi di-reset), coba kirim pesanmu sekali lagi.';
+    }
     if (status === 400 || status === 422) return '❌ Permintaan ke AI tidak valid.';
     return '❌ Maaf, AI sedang tidak bisa diakses saat ini.';
   }
@@ -393,7 +395,7 @@ export async function askAITool({ jid, userText, systemPrompt, tools, model, for
   }
 }
 
-// ─── Raw-JSON output (untuk backend tanpa function-calling, mis. Grok) ───
+// ─── Raw-JSON output (Legacy / Fallback) ───
 
 /**
  * Parser tahan banting untuk output JSON dari model: buang code fence
@@ -417,17 +419,11 @@ function extractJsonBlock(raw) {
 }
 
 /**
- * [Grok support] Minta model membalas HANYA satu objek JSON valid lalu parse
- * hasilnya di sisi client. Dipakai untuk backend yang TIDAK mendukung
- * function-calling — Grok v1 menerima `tools` tanpa error tapi tidak pernah
- * mengeksekusinya (API_USAGE.md §9) — sehingga satu-satunya cara mendapat
- * struktur data darinya adalah pola raw-JSON.
- *
- * Retry internal: percobaan berikutnya menyertakan peringatan format yang
- * lebih tegas di akhir prompt. Selalu session baru (forceNew) agar output
- * rusak dari percobaan sebelumnya tidak mengkontaminasi percobaan berikutnya.
- * System prompt untuk Grok difold ke content (INSTRUCTION/INPUT) oleh
- * sendRequest — Grok tidak menerima field system prompt terpisah.
+ * [Deprecated / Fallback] Minta model membalas HANYA satu objek JSON valid lalu parse
+ * hasilnya di sisi client.
+ * Catatan: Sejak revisi API_USAGE.md §9, Grok dan seluruh backend kini sudah
+ * mendukung tool/function-calling resmi (askAITool) via scrapers/tool_protocol.py.
+ * Fungsi ini dipertahankan sebagai legacy fallback saja.
  *
  * @param {object} options
  * @param {string}  options.jid            - id untuk logging/session namespace
@@ -982,6 +978,9 @@ export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, a
       return parseSegments(text);
     } catch (err) {
       const status = err.response?.status;
+      if (status === 404) {
+        sessionStore.delete(jid);
+      }
       logger.warn({ jid, attempt, err: err.message, status }, `⚠️ askAISegmented: error saat request (attempt ${attempt}/${MAX_NETWORK_RETRY})`);
     }
   }
