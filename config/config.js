@@ -20,17 +20,15 @@ const config = {
   botPrefix: process.env.BOT_PREFIX || '!',
 
   // ─── AI API (PAF-Model gateway: DeepSeek + Qwen + Grok) ───
-  // Pembagian tugas (swap backend):
-  //   - chatModel  → semua chat/interaksi natural dengan user (Qwen)
-  //   - taskModel  → intent detection & task background berbasis tool-calling:
-  //                  botBrain, memoryService, approval, dll (DeepSeek)
-  //   - newsModel  → plugin economicNews (Grok — akses real-time X/Twitter;
-  //                  chat-only v1: tanpa tools/task_type/think_mode)
-  //   Vision & media generation TIDAK lewat config — hardcoded 'qwen' di
-  //   aiService (describeImage/describeDocument/describeSocialMedia/
-  //   generateImage/generateVideo/webSearch + pesan ber-gambar) karena itu
-  //   kemampuan eksklusif Qwen (DeepSeek butuh model_tab "vision" khusus).
+  // Pembagian tugas:
+  //   - chatModel   → chat & interaksi natural dengan user (Qwen atau DeepSeek)
+  //   - taskModel   → background tasks berbasis tool-calling: botBrain, memoryService, approval (DeepSeek/Grok)
+  //   - intentModel → intent detection (DeepSeek)
+  //   - newsModel   → plugin economicNews (Grok / DeepSeek)
+  //   Media generation (generateImage/generateVideo/webSearch) tetap Qwen (task_type Qwen-only).
+  //   Attachment (gambar/file) kini didukung oleh Qwen dan DeepSeek tanpa model_tab khusus.
   // Nilai HARUS sesuai regex gateway: ^(deepseek|qwen|grok)(?:\(([^)]+)\))?$
+  // Contoh: 'deepseek', 'qwen', 'grok', atau ber-nomor akun 'deepseek(1)', 'qwen(1)'.
   ai: {
     baseUrl: process.env.AI_API_URL || '',
     apiKey: process.env.AI_API_KEY || process.env.PAF_API_TOKEN || '',

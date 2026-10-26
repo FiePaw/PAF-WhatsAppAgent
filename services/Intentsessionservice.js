@@ -135,10 +135,8 @@ export async function initIntentSession(senderJid) {
 
     const { systemPrompt, tools } = await _buildToolsAndPrompt();
 
-    // DeepSeek membaca system prompt dari role "system" (§5.2 API_USAGE.md) —
-    // dikirim di pesan init; sesi browser menyimpan konteksnya untuk turn
-    // berikutnya. (Pola Qwen lama menggabungkan prompt ke content karena
-    // Qwen tidak menerima field system prompt terpisah.)
+    // DeepSeek membaca system prompt dari role "system" (§5.2 API_USAGE.md).
+    // web_search: false agar intent detection tidak memicu pencarian web
     const res = await client.post('/v1/chat/completions', {
       model: config.ai.intentModel,
       messages: [
@@ -149,6 +147,7 @@ export async function initIntentSession(senderJid) {
       tool_choice: 'auto', // bermakna untuk Qwen; DeepSeek mengabaikannya — harmless
       stream: false,
       think_mode: 'thinking', // keputusan produk: intent di DeepSeek pakai expert+DeepThink (lebih teliti)
+      web_search: false,
     });
 
     const sessionId =
@@ -215,32 +214,30 @@ export async function detectIntentWithSession(senderJid, text, attachments = nul
 // ─── Internal: kirim ke session dengan auto-reinit jika error ──────────
 async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false, attachments = null) {
   try {
-    const { tools } = await _buildToolsAndPrompt();
+    const { systemPrompt, tools } = await _buildToolsAndPrompt();
 
-    // [Fitur 4 · Bot Memahami Waktu] Sesi intent tidak pernah rebuild system
-    // prompt per pesan (BASE_PROMPT cuma dikirim sekali di initIntentSession),
-    // jadi konteks waktu presisi disuntikkan di sini -- di content pesan yang
-    // dikirim SETIAP kali (pola sama seperti reinforcedDefinition di
-    // getIntentToolSchemas() yang juga di-resend tiap pesan, bukan cuma sekali
-    // di awal seperti BASE_PROMPT).
+    // [Fitur 4 · Bot Memahami Waktu] Sesi intent menginjeksi konteks waktu
+    // presisi ke content pesan user.
     const timeContext = `[Konteks waktu sekarang: ${getPreciseTimeString()}]`;
 
+    // System prompt dikirim ulang di setiap request karena PAF-Model
+    // menyuntikkannya ke [SYSTEM CONTEXT] per turn dan tidak menyimpannya di session server.
     const body = {
       model: config.ai.intentModel,
-      messages: [{ role: 'user', content: `${timeContext}\n${text}` }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `${timeContext}\n${text}` },
+      ],
       tools,
       tool_choice: 'auto', // bermakna untuk Qwen; DeepSeek mengabaikannya — harmless
       stream: false,
       think_mode: 'thinking', // konsisten dengan initIntentSession (expert+DeepThink)
+      web_search: false,      // matikan web search agar intent detection cepat & hemat
     };
 
-    // Sertakan attachment gambar jika ada
+    // Sertakan attachment gambar jika ada (DeepSeek kini mendukung attachment secara native)
     if (Array.isArray(attachments) && attachments.length > 0) {
       body.attachments = attachments;
-      // DeepSeek butuh model_tab "vision" untuk menerima gambar (API_USAGE.md §8)
-      if (config.ai.intentModel?.startsWith('deepseek')) {
-        body.model_tab = 'vision';
-      }
       logger.debug({ senderJid, attachmentCount: attachments.length }, '🖼️ Intent session: kirim dengan attachment');
     }
 

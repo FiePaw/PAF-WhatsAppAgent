@@ -3,6 +3,31 @@
 Semua perubahan penting pada project ini didokumentasikan di file ini.  
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [6.8.2] — 2026-10-26
+
+**Support PAF-Model Update: Unified System Prompt, DeepSeek UI & Toggle Defaults, Native Attachments**
+
+Menyesuaikan agen dengan pembaruan backend PAF-Model (per `NEEDUPDATE/CHANGELOG.md` dan `API_USAGE.md`):
+- **Unified System Prompt**:
+  - `services/aiService.js`: Mengirim pesan `{ role: 'system', content: ... }` di setiap turn request (bukan hanya pesan pertama), karena PAF-Model menyuntikkan system prompt ke `[SYSTEM CONTEXT]` per turn dan tidak menyimpannya di session browser server.
+  - `services/aiService.js`: Menghapus trik lama `INSTRUCTION: "..." INPUT: "..."` pada Qwen/Grok karena semua backend kini mendukung role `system`/`developer` OpenAI standar.
+  - `services/intentSessionService.js`: Menyertakan `systemPrompt` di setiap request evaluasi intent (`_sendToIntentSession`).
+- **DeepSeek Toggle & Search Control**:
+  - `services/aiService.js`: Menambahkan dukungan kontrol eksplisit `deep_think` dan `web_search` (boolean) di `sendRequest()`, `askAI()`, `askAISegmented()`, dan `askAITool()`.
+  - `services/aiService.js`: `askAITool()` kini otomatis menyetel default `webSearch: false` untuk background tool-calling (botBrain, memoryService, dll.) agar DeepSeek tidak memicu web search yang memperlambat respons dan menambah noise.
+  - `services/intentSessionService.js`: Menyetel `web_search: false` secara eksplisit pada sesi deteksi intent (`initIntentSession` dan `_sendToIntentSession`).
+- **Hapus `model_tab: "vision"` & Dukungan Native Attachment DeepSeek**:
+  - `services/aiService.js` & `services/intentSessionService.js`: Menghapus parameter usang `model_tab = 'vision'`. Attachment gambar/file kini diproses langsung via array `attachments` di DeepSeek maupun Qwen.
+  - `services/aiService.js`: Fleksibilitas model routing untuk gambar — tidak lagi memaksakan hardcode Qwen jika `chatModel` adalah DeepSeek (hanya fallback ke Qwen jika model adalah Grok yang belum mendukung attachment).
+- **Inisialisasi Chat Session Owner saat Bot Start**:
+  - `services/aiService.js`: Menambahkan fungsi `initOwnerChatSession(force)` yang proaktif menginisialisasi sesi percakapan chat untuk owner saat bot start jika belum ada di `sessionStore`. Sesi ini di-sync ke kedua format JID owner (`ownerLid` dan `ownerJid`).
+  - `core/bot.js`: Memanggil `await initOwnerChatSession()` langsung setelah `initOwnerIntentSession()` saat event `connection === 'open'`. Pesan pertama owner tidak lagi mengalami jeda pembuatan sesi browser ("🆕 Pesan pertama: session baru dibuat") melainkan langsung berlanjut di mode "continue" (`X-Session-ID`).
+- **Update Dokumentasi & Think Mode**:
+  - Memperbarui dokumentasi alias `think_mode` (`auto`, `instant`/`fast`, `thinking`, `search`, `research`) dan menghapus alias usang `vision`.
+  - `config/config.js`: Memperbarui komentar arsitektur AI API.
+
+---
+
 ## [6.8.1] — 2026-10-19
 
 **Support Client API Token Authentication (PAF-Model Update)**

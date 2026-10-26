@@ -3,3 +3,4 @@ auth/
 auth/session/
 auth/session/*
 .env
+NEEDUPDATE/*

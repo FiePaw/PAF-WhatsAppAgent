@@ -2,38 +2,40 @@
 // ─────────────────────────────────────────────────────────────────────────
 // Integrasi ke PAF-Model gateway (lihat API_USAGE.md di FiePaw/PAF-Model).
 // Gateway ini fronting TIGA backend browser-automation:
-//   - qwen     → dipakai untuk semua CHAT/interaksi natural dengan user,
-//                plus semua tugas vision/media: deskripsi gambar/dokumen/
-//                video, generate gambar/video, web search, dan pesan chat
-//                yang mengandung gambar (DeepSeek butuh model_tab "vision"
-//                khusus, Qwen tidak perlu apa-apa untuk terima gambar)
+//   - qwen     → dipakai untuk chat/interaksi natural dengan user,
+//                plus tugas media & vision: deskripsi gambar/dokumen/video,
+//                generate gambar/video, web search.
 //   - deepseek → dipakai untuk intent detection & task background berbasis
-//                tool-calling (botBrain, memoryService, approval, dll)
+//                tool-calling (botBrain, memoryService, approval, dll).
+//                Kini juga mendukung input gambar/dokumen via attachments.
 //   - grok     → didukung untuk chat dan tool-calling universal (§9 API_USAGE.md).
 //                Dipakai plugin economicNews via askAITool() & task background.
 //
-// ─── Perubahan penting per revisi API_USAGE.md terbaru ───────────────────
+// ─── Perubahan penting per revisi API_USAGE.md & PAF-Model terbaru ───────────
 //   1. Sesi TIDAK PUNYA TTL otomatis di server lagi (§6.2.1) — sesi hidup
 //      selamanya sampai di-DELETE eksplisit. Bot sekarang WAJIB mengelola
 //      lifetime sesi sendiri (lihat sessionStore.js + config.sessionTtl).
 //   2. Endpoint baru `DELETE /v1/sessions/{session_id}` (§4.5/§6.2.1) —
 //      resetSession() sekarang benar-benar menghapus sesi di server, bukan
 //      cuma mapping lokal seperti sebelumnya.
-//   3. `tools` (OpenAI function-calling shape, §9) didukung di kedua
-//      backend — dipakai untuk task background (intent detection, botBrain,
-//      economicNews) alih-alih menyuruh model menulis raw JSON di tengah
-//      teks lalu kita regex sendiri. Lihat askAITool() di bawah dan
-//      utils/toolCalling.js.
-//   4. System prompt: DeepSeek membaca system prompt dari message ber-role
-//      "system" (dikirim hanya di pesan pertama, karena browser session
-//      sudah menyimpan konteksnya). Qwen TIDAK membaca system message dari
-//      array messages sama sekali — makanya untuk Qwen kita tetap pakai
-//      trik lama (system prompt digabung ke content: `INSTRUCTION: ... INPUT: ...`).
-//   5. `x_meta.mode_fallback: true` menandakan sesi browser DeepSeek hilang
-//      di server dan diam-diam mulai percakapan baru — sekarang kita respons
+//   3. `tools` (OpenAI function-calling shape, §9) didukung di semua backend
+//      (DeepSeek, Qwen, Grok) — dipakai untuk task background (intent detection,
+//      botBrain, economicNews) alih-alih menyuruh model menulis raw JSON.
+//   4. System prompt terpadu (Unified System Prompt): DeepSeek, Qwen, dan Grok
+//      semuanya membaca role "system" dan "developer" yang diekstrak oleh gateway.
+//      System prompt diinjeksi ke [SYSTEM CONTEXT] pada SETIAP turn dan TIDAK
+//      disimpan di session server, sehingga WAJIB dikirim ulang di setiap request.
+//   5. DeepSeek UI Baru & Toggle: Mode Instant/Expert/Vision dihapus. Dua toggle
+//      tersisa (DeepThink dan Search) aktif secara DEFAULT ON di situs. Kontrol
+//      eksplisit disediakan via `deep_think` dan `web_search` (boolean) atau
+//      `think_mode` baru ('auto', 'instant'/'fast', 'thinking', 'search', 'research').
+//      `model_tab` sudah usang dan diabaikan. Attachment gambar/file diterima
+//      langsung via field `attachments` (clipboard paste).
+//   6. `x_meta.mode_fallback: true` menandakan sesi browser DeepSeek hilang
+//      di server dan diam-diam mulai percakapan baru — kita respons
 //      aktif: trigger memoryService.summarizeAndRemember() di background
 //      agar konteks yang sempat ada tidak hilang percuma (lihat sendRequest).
-//   6. Client API Token Authentication (§3): Setiap endpoint REST API kini wajib
+//   7. Client API Token Authentication (§3): Setiap endpoint REST API kini wajib
 //      menyertakan header `Authorization: Bearer <API_TOKEN>`. Dikonfigurasi
 //      lewat PAF_API_TOKEN atau AI_API_KEY di .env.
 // ─────────────────────────────────────────────────────────────────────────
@@ -109,7 +111,9 @@ function resolveBackend(model) {
  * @param {string}   options.userText
  * @param {string}   [options.systemPrompt]
  * @param {boolean}  [options.forceNew=false]
- * @param {string}   [options.thinkMode]        - "auto" | "thinking" | "fast" (arti beda per backend)
+ * @param {string}   [options.thinkMode]        - "auto" | "instant" | "fast" | "thinking" | "search" | "research"
+ * @param {boolean}  [options.deepThink]        - kontrol eksplisit DeepThink (DeepSeek)
+ * @param {boolean}  [options.webSearch]        - kontrol eksplisit Web Search (DeepSeek)
  * @param {Array}    [options.attachments]      - [{ filename, data (base64), mime_type? }]
  * @param {string}   [options.taskType]         - "chat" | "create_image" | "create_video" | "web_search" (qwen only)
  * @param {string}   [options.model]            - "deepseek" | "qwen" | "<backend>(<account>)"
@@ -120,8 +124,8 @@ function resolveBackend(model) {
  * @returns {Promise<{ text: string, urls: string[], backend: string, toolCall: {name, args}|null }>}
  */
 async function sendRequest({
-  jid, userText, systemPrompt, forceNew = false, thinkMode, attachments, taskType, model,
-  tools, memoryJid, useMemory = true,
+  jid, userText, systemPrompt, forceNew = false, thinkMode, deepThink, webSearch,
+  attachments, taskType, model, tools, memoryJid, useMemory = true,
 }) {
   const resolvedModel = model || config.ai.chatModel;
   const backend = resolveBackend(resolvedModel);
@@ -132,7 +136,7 @@ async function sendRequest({
   const isFirstMessage = !existingSessionId;
 
   const headers = {};
-  let messages;
+  let messages = [];
 
   // Normalisasi system prompt: ganti semua newline dengan spasi
   let normalizedPrompt = systemPrompt
@@ -157,30 +161,20 @@ async function sendRequest({
     }
   }
 
-  if (backend === 'deepseek') {
-    // DeepSeek: system prompt via role "system" — hanya perlu dikirim saat
-    // pesan pertama, karena browser session akan menyimpan konteksnya.
-    messages = [];
-    if (isFirstMessage && normalizedPrompt) {
-      messages.push({ role: 'system', content: normalizedPrompt });
-    }
-    messages.push({ role: 'user', content: userText });
-  } else {
-    // Qwen/Grok: tidak baca system message dari array messages — tetap pakai
-    // trik lama (gabung ke content seperti API lama). Grok v1 juga tidak
-    // menerima field system prompt terpisah (§5.2: DeepSeek only), jadi
-    // fold ke content adalah satu-satunya cara persona sampai ke Grok.
-    const content = isFirstMessage
-      ? (normalizedPrompt ? `INSTRUCTION: "${normalizedPrompt}" INPUT: "${userText}"` : `INPUT: "${userText}"`)
-      : `INPUT: "${userText}"`;
-    messages = [{ role: 'user', content }];
+  // System prompt terpadu (Unified System Prompt): Semua backend (DeepSeek,
+  // Qwen, Grok) kini membaca role "system" dari array messages.
+  // PAF-Model menyuntikkannya ke [SYSTEM CONTEXT] pada SETIAP turn dan TIDAK
+  // menyimpannya di session server, sehingga WAJIB dikirim ulang di setiap request.
+  if (normalizedPrompt) {
+    messages.push({ role: 'system', content: normalizedPrompt });
   }
+  messages.push({ role: 'user', content: userText });
 
   if (isFirstMessage) {
     logger.info({ jid, backend, taskType: taskType || 'chat' }, '🆕 Pesan pertama: session baru dibuat');
   } else {
     headers['X-Session-ID'] = existingSessionId;
-    logger.debug({ jid, backend, sessionId: existingSessionId.slice(0, 8) + '...' }, '🔄 Continue mode: user message saja');
+    logger.debug({ jid, backend, sessionId: existingSessionId.slice(0, 8) + '...' }, '🔄 Continue mode: session ID + user message');
   }
 
   const body = {
@@ -189,22 +183,17 @@ async function sendRequest({
     stream: false,
   };
 
-  // task_type — hanya berlaku untuk backend qwen (diabaikan gateway untuk deepseek)
+  // task_type — hanya berlaku untuk backend qwen (diabaikan gateway untuk deepseek/grok)
   if (taskType && taskType !== 'chat') {
     body.task_type = taskType;
     logger.info({ jid, taskType }, '🎯 Request dengan task_type khusus');
   }
 
-  // think_mode — opsional, arti beda per backend (lihat §7 API_USAGE.md).
-  // ⚠️ Keputusan produk (revisi swap backend):
-  //   - Qwen: task berat — task_type khusus (create_image/create_video/
-  //     web_search), attachment (vision/dokumen/video), dan tool-calling —
-  //     tetap dipaksa 'thinking' (deep reasoning). Chat natural polos pakai
-  //     thinkMode dari caller (default 'auto') agar balasan cepat & responsif.
-  //   - DeepSeek: memakai thinkMode apa adanya (intent detection di
-  //     intentSessionService mengirim 'thinking' secara eksplisit).
-  //   - Grok: think_mode TIDAK didukung di v1 — diabaikan diam-diam oleh
-  //     gateway (§7), jadi jangan pernah dikirim.
+  // think_mode — opsional, arti beda per backend (lihat API_USAGE.md).
+  // ⚠️ Keputusan produk:
+  //   - Qwen: task berat (task khusus, attachment, tools) dipaksa 'thinking'
+  //   - DeepSeek: memakai thinkMode apa adanya ('auto', 'instant'/'fast', 'thinking', 'search', 'research')
+  //   - Grok: think_mode tidak didukung di API — diabaikan / jangan dikirim
   const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
   const hasTools = Array.isArray(tools) && tools.length > 0;
   let resolvedThinkMode;
@@ -218,17 +207,19 @@ async function sendRequest({
     body.think_mode = resolvedThinkMode;
   }
 
+  // Kontrol eksplisit DeepThink & Web Search (DeepSeek UI Baru)
+  if (typeof deepThink === 'boolean') {
+    body.deep_think = deepThink;
+  }
+  if (typeof webSearch === 'boolean') {
+    body.web_search = webSearch;
+  }
+
   // attachments — opsional, array of { filename, data (base64), mime_type? }
+  // Didukung oleh Qwen dan DeepSeek secara native tanpa perlu model_tab usang
   if (Array.isArray(attachments) && attachments.length > 0) {
     body.attachments = attachments;
     logger.debug({ jid, attachmentCount: attachments.length }, '📎 Request dengan attachment');
-
-    // DeepSeek butuh model_tab "vision" khusus untuk terima gambar.
-    // Normalnya kita sudah routing gambar ke Qwen di layer atas, tapi
-    // ditambahkan sebagai jaring pengaman jika suatu saat DeepSeek dipaksa.
-    if (backend === 'deepseek') {
-      body.model_tab = 'vision';
-    }
   }
 
   // tools — function-calling shape (§9 API_USAGE.md). Dikirim ulang setiap
@@ -304,7 +295,9 @@ async function sendRequest({
  * @param {string}  options.jid
  * @param {string}  options.userText
  * @param {string}  [options.systemPrompt]
- * @param {string}  [options.thinkMode]      - "auto" | "thinking" | "fast"
+ * @param {string}  [options.thinkMode]      - "auto" | "instant" | "fast" | "thinking" | "search" | "research"
+ * @param {boolean} [options.deepThink]      - kontrol eksplisit DeepThink
+ * @param {boolean} [options.webSearch]      - kontrol eksplisit Web Search
  * @param {Array}   [options.attachments]    - [{ filename, data (base64), mime_type? }]
  * @param {string}  [options.model]          - override eksplisit "deepseek" | "qwen" | "<backend>(<account>)"
  * @param {string}  [options.memoryJid]      - jid asli untuk lookup memori, jika berbeda dari `jid`
@@ -312,14 +305,17 @@ async function sendRequest({
  * @param {boolean} [options.forceNew=false]
  * @returns {Promise<string>} teks balasan AI
  */
-export async function askAI({ jid, userText, systemPrompt, thinkMode, attachments, model: modelOverride, memoryJid, useMemory, forceNew }) {
+export async function askAI({ jid, userText, systemPrompt, thinkMode, deepThink, webSearch, attachments, model: modelOverride, memoryJid, useMemory, forceNew }) {
   const hasImage = Array.isArray(attachments) && attachments.length > 0;
-  // Gambar selalu ke Qwen (vision) — taskModel kini DeepSeek, dan DeepSeek
-  // butuh model_tab "vision" khusus untuk lampiran.
-  const model = modelOverride || (hasImage ? 'qwen' : config.ai.chatModel);
+  // Gambar didukung oleh Qwen dan DeepSeek secara native.
+  // Jika model saat ini adalah Grok (belum mendukung attachment di UI-nya), fallback ke Qwen.
+  let model = modelOverride || config.ai.chatModel;
+  if (hasImage && model.startsWith('grok')) {
+    model = 'qwen';
+  }
 
   try {
-    const { text } = await sendRequest({ jid, userText, systemPrompt, thinkMode, attachments, taskType: 'chat', model, memoryJid, useMemory, forceNew });
+    const { text } = await sendRequest({ jid, userText, systemPrompt, thinkMode, deepThink, webSearch, attachments, taskType: 'chat', model, memoryJid, useMemory, forceNew });
     return text;
   } catch (err) {
     const status = err.response?.status;
@@ -371,15 +367,20 @@ export async function askAI({ jid, userText, systemPrompt, thinkMode, attachment
  * @param {string}   [options.memoryJid]
  * @param {boolean}  [options.useMemory=false] - default false, task background biasanya sudah bawa konteksnya sendiri di prompt
  * @param {string}   [options.thinkMode]
+ * @param {boolean}  [options.deepThink]
+ * @param {boolean}  [options.webSearch=false] - default false untuk task background agar bebas latency search
  * @returns {Promise<{ name: string|null, args: object, raw: string|null }>}
  */
-export async function askAITool({ jid, userText, systemPrompt, tools, model, forceNew = true, memoryJid, useMemory = false, thinkMode }) {
+export async function askAITool({ jid, userText, systemPrompt, tools, model, forceNew = true, memoryJid, useMemory = false, thinkMode, deepThink, webSearch }) {
   const resolvedModel = model || config.ai.taskModel;
+  // Task background default webSearch: false agar tidak memicu web search yang tidak diinginkan
+  const resolvedWebSearch = typeof webSearch === 'boolean' ? webSearch : false;
 
   try {
     const { text, toolCall } = await sendRequest({
       jid, userText, systemPrompt, thinkMode, taskType: 'chat',
       model: resolvedModel, forceNew, memoryJid, useMemory, tools,
+      deepThink, webSearch: resolvedWebSearch,
     });
 
     if (toolCall) {
@@ -933,6 +934,8 @@ function buildContextHintsBlock(contextHints) {
  * @param {string}  options.userText
  * @param {string}  [options.systemPrompt]
  * @param {string}  [options.thinkMode]
+ * @param {boolean} [options.deepThink]
+ * @param {boolean} [options.webSearch]
  * @param {Array}   [options.attachments]
  * @param {string}  [options.model]         - override eksplisit "deepseek" | "qwen" | "<backend>(<account>)"
  * @param {string}  [options.memoryJid]     - jid asli untuk lookup memori, jika berbeda dari `jid`
@@ -940,11 +943,14 @@ function buildContextHintsBlock(contextHints) {
  * @param {object}  [options.contextHints]  - lihat buildContextHintsBlock() — Fix #2: bantu AI memutuskan segmentasi
  * @returns {Promise<{ text: string, delay: number }[]>}
  */
-export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, attachments, model: modelOverride, memoryJid, useMemory, contextHints }) {
+export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, deepThink, webSearch, attachments, model: modelOverride, memoryJid, useMemory, contextHints }) {
   const hasImage = Array.isArray(attachments) && attachments.length > 0;
-  // Gambar selalu ke Qwen (vision) — taskModel kini DeepSeek, dan DeepSeek
-  // butuh model_tab "vision" khusus untuk lampiran.
-  const model = modelOverride || (hasImage ? 'qwen' : config.ai.chatModel);
+  // Gambar didukung oleh Qwen dan DeepSeek secara native.
+  // Jika model saat ini adalah Grok (belum mendukung attachment di UI-nya), fallback ke Qwen.
+  let model = modelOverride || config.ai.chatModel;
+  if (hasImage && model.startsWith('grok')) {
+    model = 'qwen';
+  }
 
   // Fix #2: sinyal konteks numerik (panjang pesan, jeda, kecepatan chat) —
   // diselipkan SETELAH instruksi format, SEBELUM persona, supaya AI punya
@@ -963,6 +969,8 @@ export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, a
         userText,
         systemPrompt: wrappedSystemPrompt,
         thinkMode: thinkMode || 'auto',
+        deepThink,
+        webSearch,
         attachments,
         taskType: 'chat',
         model,
@@ -991,40 +999,98 @@ export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, a
 }
 
 /**
- * Warm-up owner AI session saat bot start.
- * Kirim persona owner sebagai system prompt dengan dummy input ringan.
- * Session ID tersimpan ke sessionStore sehingga percakapan pertama owner
- * langsung dalam mode "continue" (persona sudah di-set di server).
+ * Helper internal: Sinkronkan session ID owner ke kedua bentuk JID
+ * (LID dan @s.whatsapp.net) agar pesan masuk via format manapun
+ * langsung menggunakan session yang sama tanpa delay pembuatan sesi baru.
  *
- * Selalu pakai config.ai.chatModel (kini Qwen) — warmup ini untuk chat biasa.
- * useMemory: true (default) — warmup adalah titik terbaik untuk mengisi
- * ulang konteks dari sesi-sesi sebelumnya begitu bot baru menyala.
- *
- * @param {string} ownerJid   - JID owner (@s.whatsapp.net atau @lid)
- * @param {string} systemPrompt - persona string dari persona.json
+ * @param {string} primaryJid
+ * @param {string} sessionId
  */
-export async function warmupOwnerSession(ownerJid, systemPrompt) {
-  // Jika session sudah ada (misalnya bot restart cepat), skip
-  if (sessionStore.get(ownerJid)) {
-    logger.info({ ownerJid }, '⚡ Owner session sudah ada, skip warmup');
-    return;
+function syncOwnerJidSessions(primaryJid, sessionId) {
+  if (!sessionId) return;
+  if (config.ownerJid && config.ownerJid !== primaryJid) {
+    sessionStore.set(config.ownerJid, sessionId);
+  }
+  if (config.ownerLid && config.ownerLid !== primaryJid) {
+    sessionStore.set(config.ownerLid, sessionId);
+  }
+}
+
+/**
+ * Inisialisasi chat session untuk owner saat bot start (bukan saat pesan pertama).
+ *
+ * Skenario:
+ *   1. Ambil JID owner (prioritas LID jika tersedia, fallback @s.whatsapp.net).
+ *   2. Cek apakah session sudah ada di sessionStore (misal dimuat dari DB).
+ *      Jika sudah ada, gunakan dan sinkronkan ke LID dan @s.whatsapp.net.
+ *   3. Jika belum ada, kirim pesan inisialisasi awal ke server dengan persona
+ *      owner + injeksi memori jangka panjang (useMemory: true).
+ *   4. Session ID yang dikembalikan server otomatis tersimpan di sessionStore
+ *      (dan di-persist ke DB).
+ *   5. Sinkronkan ke config.ownerJid dan config.ownerLid.
+ *   Hasil: Saat owner mengirim pesan pertama, bot sudah dalam mode "continue"
+ *   sehingga respons instan dan tidak ada jeda inisialisasi sesi di pesan pertama.
+ *
+ * @param {boolean} [force=false] - Jika true, paksa buat sesi baru meski sudah ada
+ * @returns {Promise<string|null>} sessionId atau null jika gagal
+ */
+export async function initOwnerChatSession(force = false) {
+  const ownerJid = config.ownerLid || config.ownerJid;
+  if (!ownerJid) {
+    logger.warn('Owner JID belum diset, skip init chat session');
+    return null;
+  }
+
+  // Jika session sudah ada di sessionStore (misal dari DB) dan tidak force
+  const existingSessionId = sessionStore.get(ownerJid);
+  if (existingSessionId && !force) {
+    logger.info(
+      { ownerJid, sessionId: existingSessionId.slice(0, 8) + '...' },
+      '⚡ Owner chat session sudah ada (dimuat dari DB), siap digunakan'
+    );
+    syncOwnerJidSessions(ownerJid, existingSessionId);
+    return existingSessionId;
   }
 
   try {
-    logger.info({ ownerJid }, '🔥 Warming up owner AI session dengan persona...');
-    // Kirim init message — jawaban AI diabaikan, hanya sesi + persona yang diperlukan
+    logger.info({ ownerJid }, '💬 Menginisialisasi owner chat session saat bot start...');
+
+    const { getPersona } = await import('./personaService.js');
+    const { prompt: systemPrompt } = getPersona(ownerJid, true);
+
     await sendRequest({
       jid: ownerJid,
-      userText: 'init',
+      userText: 'Halo! Siap mengobrol.',
       systemPrompt,
       forceNew: true,
       taskType: 'chat',
       model: config.ai.chatModel,
+      useMemory: true, // Injeksi memori jangka panjang ke system prompt sesi baru
     });
-    logger.info({ ownerJid }, '✅ Owner AI session berhasil di-warmup');
+
+    const sessionId = sessionStore.get(ownerJid);
+    if (sessionId) {
+      syncOwnerJidSessions(ownerJid, sessionId);
+      logger.info(
+        { ownerJid, sessionId: sessionId.slice(0, 8) + '...' },
+        '✅ Owner chat session berhasil diinisialisasi dan siap digunakan'
+      );
+    }
+    return sessionId;
   } catch (err) {
-    logger.warn({ ownerJid, err: err.message }, '⚠️ Gagal warmup owner AI session (akan retry saat pesan pertama)');
+    logger.warn(
+      { ownerJid, err: err.message },
+      '⚠️ Gagal inisialisasi owner chat session saat start (akan fallback saat pesan pertama)'
+    );
+    return null;
   }
+}
+
+/**
+ * Backward compatibility: alias untuk initOwnerChatSession
+ */
+export async function warmupOwnerSession(ownerJid, systemPrompt) {
+  return initOwnerChatSession();
 }
 
 /**

@@ -12,6 +12,7 @@ import { loadPlugins } from './pluginLoader.js';
 import { loadScheduledPlugins } from './scheduledPluginLoader.js';
 import { handleMessage } from './messageHandler.js';
 import { initOwnerIntentSession } from '../services/intentSessionService.js';
+import { initOwnerChatSession } from '../services/aiService.js';
 import { initBotBrain, handleReceiptUpdate, onNewJid } from '../services/botBrain.js';
 import { pruneAllOldMessages, getAllKnownJids } from '../services/chatHistoryService.js';
 import { updatePresence } from '../services/presenceService.js';
@@ -130,9 +131,10 @@ export async function startBot() {
       await sessionStore.loadFromDb();
       logger.info({ sessions: sessionStore.size() }, '📦 AI sessions dimuat dari DB');
 
-      // ── Init intent session untuk owner ───────────────────────────────────
-      // Session persisten di Qwen untuk deteksi intent setiap pesan owner
+      // ── Init intent & chat session untuk owner ────────────────────────────
+      // Session persisten untuk deteksi intent dan percakapan natural owner
       await initOwnerIntentSession();
+      await initOwnerChatSession();
 
       // ── Start semua cron job yang sudah di-register plugins ───────────────
       cronService.startAll();
