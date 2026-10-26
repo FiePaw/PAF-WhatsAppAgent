@@ -112,9 +112,9 @@ LOG_LEVEL=info
 ```json
 {
   "owner": "Kamu adalah PAF, AI agent pribadi owner. ...",
-  "default": "Kamu adalah Aria, asisten WhatsApp yang ramah. ...",
+  "default": "Kamu adalah PAF, asisten WhatsApp yang ramah. ...",
   "users": {
-    "628111111111": "Kamu adalah Aria, teman Budi. Panggil dia Budi. ..."
+    "628111111111": "Kamu adalah PAF, teman Budi. Panggil dia Budi. ..."
   }
 }
 ```

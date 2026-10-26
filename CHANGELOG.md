@@ -3,6 +3,37 @@
 Semua perubahan penting pada project ini didokumentasikan di file ini.  
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [6.8.4] — 2026-10-26
+
+**Optimalisasi Mode Berpikir: Default "fast" untuk Qwen & "auto" untuk Semua Backend DeepSeek**
+
+- **`services/aiService.js`**:
+  - `sendRequest()`: Mengubah default resolusi `think_mode` pada model Qwen untuk task percakapan/chat biasa dari `'auto'` menjadi `'fast'` (task berat seperti task khusus, attachment, dan tools tetap dipaksa `'thinking'`).
+  - `sendRequest()`: Mengatur seluruh request yang menggunakan backend DeepSeek agar selalu menggunakan `think_mode: 'auto'`.
+  - `askAISegmented()`: Menggunakan default `thinkMode: 'fast'` saat model adalah Qwen dan `'auto'` saat menggunakan DeepSeek.
+- **`services/intentSessionService.js`**:
+  - `initIntentSession()` & `_sendToIntentSession()`: Mengubah `think_mode` dari `'thinking'` menjadi `'auto'` untuk sesi deteksi intent berbasis DeepSeek.
+
+---
+
+## [6.8.3] — 2026-10-26
+
+**Fix TypeError: p.hobbies.join is not a function pada BotBrain & Profile Sanitization**
+
+- **`utils/helpers.js`**:
+  - Menambahkan fungsi helper `ensureArray(val)` untuk menormalisasi nilai array/list string. Mampu menangani array asli, stringified JSON array (`"[\"a\", \"b\"]"`), non-breaking spaces (`\u00A0`), comma-separated strings, serta membersihkan tanda kurung/petik liar.
+- **`services/botBrain.js`**:
+  - `getUserProfile()` & `formatProfileForPrompt()`: Menggunakan `ensureArray()` untuk field `hobbies`, `topics`, `goals`, dan `sensitive` sebelum memanggil `.join(', ')`. Mencegah error `p.hobbies.join is not a function` ketika AI mengembalikan array dalam bentuk stringified JSON.
+  - `updateUserProfile()` & `thinkAndActForJid()`: Menormalisasi field array sebelum disimpan via `db.upsert` (baik hasil ekstraksi profil berkala maupun keputusan parsial `profileUpdates`).
+- **`services/contextEnricher.js`**:
+  - `checkPersonalEvents()`: Menggunakan `ensureArray(userProfile?.goals)` dan tipe proteksi string pada `.filter()` untuk mencegah crash saat mengecek event personal.
+- **`services/memoryService.js`**:
+  - `formatUserProfileForPrompt()`: Menggunakan `ensureArray()` agar field array profil user selalu terdeteksi dan terinjeksi ke memory prompt sesi chat baru.
+- **`data/userProfiles.json`**:
+  - Menormalisasi dokumen profil yang tersimpan dengan format stringified JSON array menjadi Array JSON yang valid.
+
+---
+
 ## [6.8.2] — 2026-10-26
 
 **Support PAF-Model Update: Unified System Prompt, DeepSeek UI & Toggle Defaults, Native Attachments**

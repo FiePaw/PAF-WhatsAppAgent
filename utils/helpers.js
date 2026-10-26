@@ -75,3 +75,50 @@ export function formatUptime(ms) {
   if (m > 0) return `${m}m ${s % 60}d`;
   return `${s}d`;
 }
+
+/**
+ * Normalisasi nilai agar selalu berupa array of strings.
+ * Menangani stringified JSON array ('["a", "b"]'), comma-separated string ('a, b'),
+ * non-breaking space (\u00A0), array asli, string tunggal, atau falsy value.
+ * @param {any} val
+ * @returns {string[]}
+ */
+export function ensureArray(val) {
+  if (Array.isArray(val)) {
+    if (val.length === 1 && typeof val[0] === 'string' && val[0].trim().startsWith('[')) {
+      return ensureArray(val[0]);
+    }
+    const joined = val.join(', ');
+    if (joined.trim().startsWith('[') && joined.trim().endsWith(']')) {
+      try {
+        const parsed = JSON.parse(joined.replace(/\u00A0/g, ' '));
+        if (Array.isArray(parsed)) {
+          return parsed.filter(Boolean).map((x) => String(x).replace(/\u00A0/g, ' ').trim()).filter(Boolean);
+        }
+      } catch {}
+    }
+    return val
+      .filter(Boolean)
+      .map((x) => String(x).replace(/^\[?"?|"?\]?$/g, '').replace(/\u00A0/g, ' ').trim())
+      .filter(Boolean);
+  }
+  if (typeof val === 'string' && val.trim()) {
+    const normalized = val.replace(/\u00A0/g, ' ').trim();
+    try {
+      const parsed = JSON.parse(normalized);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(Boolean).map((x) => String(x).replace(/\u00A0/g, ' ').trim()).filter(Boolean);
+      }
+    } catch {}
+    if (normalized.startsWith('[') && normalized.endsWith(']')) {
+      const inner = normalized.slice(1, -1);
+      const matches = [...inner.matchAll(/"((?:\\.|[^"\\])*)"/g)].map((m) => m[1].replace(/\\"/g, '"').trim());
+      if (matches.length > 0) {
+        return matches.filter(Boolean);
+      }
+    }
+    return normalized.split(',').map((x) => x.replace(/^\[?"?|"?\]?$/g, '').trim()).filter(Boolean);
+  }
+  return [];
+}
+

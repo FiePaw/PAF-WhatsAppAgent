@@ -25,6 +25,7 @@
 import db from './db.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
+import { ensureArray } from '../utils/helpers.js';
 
 const MEMORY_COL  = 'memories';
 const SUMMARY_COL = 'sessionSummaries';
@@ -266,10 +267,14 @@ function formatUserProfileForPrompt(jid) {
   if (p.personality) lines.push(`Kepribadian: ${p.personality}`);
   if (p.mood)         lines.push(`Mood terakhir diketahui: ${p.mood}`);
   if (p.language)     lines.push(`Gaya bahasa: ${p.language}`);
-  if (Array.isArray(p.hobbies) && p.hobbies.length)   lines.push(`Hobi: ${p.hobbies.join(', ')}`);
-  if (Array.isArray(p.topics) && p.topics.length)     lines.push(`Topik favorit: ${p.topics.join(', ')}`);
-  if (Array.isArray(p.goals) && p.goals.length)       lines.push(`Tujuan/rencana: ${p.goals.join(', ')}`);
-  if (Array.isArray(p.sensitive) && p.sensitive.length) lines.push(`Hal sensitif (hindari): ${p.sensitive.join(', ')}`);
+  const hobbies = ensureArray(p.hobbies);
+  if (hobbies.length)   lines.push(`Hobi: ${hobbies.join(', ')}`);
+  const topics = ensureArray(p.topics);
+  if (topics.length)    lines.push(`Topik favorit: ${topics.join(', ')}`);
+  const goals = ensureArray(p.goals);
+  if (goals.length)     lines.push(`Tujuan/rencana: ${goals.join(', ')}`);
+  const sensitive = ensureArray(p.sensitive);
+  if (sensitive.length) lines.push(`Hal sensitif (hindari): ${sensitive.join(', ')}`);
   if (p.summary)      lines.push(`Ringkasan: ${p.summary}`);
 
   return lines.length ? lines.join('\n') : '';

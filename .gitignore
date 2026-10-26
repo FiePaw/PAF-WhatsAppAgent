@@ -4,3 +4,4 @@ auth/session/
 auth/session/*
 .env
 NEEDUPDATE/*
+CONTEXT.md

@@ -15,6 +15,7 @@
 //   - Deteksi absen: user biasanya aktif jam ini tapi tidak ada pesan hari ini
 
 import logger from '../utils/logger.js';
+import { ensureArray } from '../utils/helpers.js';
 
 // ─── Fitur 3: Time-Aware ──────────────────────────────────────────────────────
 
@@ -211,14 +212,15 @@ function checkNationalEvents() {
  * @returns {string[]}
  */
 function checkPersonalEvents(userProfile) {
-  if (!userProfile?.goals?.length) return [];
+  const goals = ensureArray(userProfile?.goals);
+  if (!goals.length) return [];
 
   const now = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
   const keywords = ['wisuda', 'ulang tahun', 'anniversary', 'nikah', 'pernikahan',
     'ujian', 'skripsi', 'sidang', 'interview', 'test', 'tes', 'lomba', 'kompetisi'];
 
-  return userProfile.goals.filter((goal) =>
-    keywords.some((kw) => goal.toLowerCase().includes(kw))
+  return goals.filter((goal) =>
+    typeof goal === 'string' && keywords.some((kw) => goal.toLowerCase().includes(kw))
   );
 }
 

@@ -192,14 +192,17 @@ async function sendRequest({
   // think_mode — opsional, arti beda per backend (lihat API_USAGE.md).
   // ⚠️ Keputusan produk:
   //   - Qwen: task berat (task khusus, attachment, tools) dipaksa 'thinking'
-  //   - DeepSeek: memakai thinkMode apa adanya ('auto', 'instant'/'fast', 'thinking', 'search', 'research')
+  //   - Chat session / non-heavy di Qwen default 'fast' (bukan 'auto') agar respons instan & tidak bertele-tele
+  //   - DeepSeek: selalu menggunakan mode 'auto' untuk semua request yang menggunakan backend DeepSeek
   //   - Grok: think_mode tidak didukung di API — diabaikan / jangan dikirim
   const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
   const hasTools = Array.isArray(tools) && tools.length > 0;
   let resolvedThinkMode;
   if (backend === 'qwen') {
     const isHeavyTask = isSpecialTask || hasAttachments || hasTools;
-    resolvedThinkMode = isHeavyTask ? 'thinking' : (thinkMode || 'auto');
+    resolvedThinkMode = isHeavyTask ? 'thinking' : (thinkMode || 'fast');
+  } else if (backend === 'deepseek') {
+    resolvedThinkMode = 'auto';
   } else {
     resolvedThinkMode = thinkMode;
   }
@@ -964,11 +967,12 @@ export async function askAISegmented({ jid, userText, systemPrompt, thinkMode, d
 
   for (let attempt = 1; attempt <= MAX_NETWORK_RETRY; attempt++) {
     try {
+      const defaultThinkMode = model.startsWith('qwen') ? 'fast' : 'auto';
       const { text } = await sendRequest({
         jid,
         userText,
         systemPrompt: wrappedSystemPrompt,
-        thinkMode: thinkMode || 'auto',
+        thinkMode: thinkMode || defaultThinkMode,
         deepThink,
         webSearch,
         attachments,

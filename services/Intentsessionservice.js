@@ -146,7 +146,7 @@ export async function initIntentSession(senderJid) {
       tools,
       tool_choice: 'auto', // bermakna untuk Qwen; DeepSeek mengabaikannya — harmless
       stream: false,
-      think_mode: 'thinking', // keputusan produk: intent di DeepSeek pakai expert+DeepThink (lebih teliti)
+      think_mode: 'auto', // mode auto untuk backend DeepSeek
       web_search: false,
     });
 
@@ -231,7 +231,7 @@ async function _sendToIntentSession(senderJid, sessionId, text, isRetry = false,
       tools,
       tool_choice: 'auto', // bermakna untuk Qwen; DeepSeek mengabaikannya — harmless
       stream: false,
-      think_mode: 'thinking', // konsisten dengan initIntentSession (expert+DeepThink)
+      think_mode: 'auto',     // mode auto untuk backend DeepSeek
       web_search: false,      // matikan web search agar intent detection cepat & hemat
     };
 

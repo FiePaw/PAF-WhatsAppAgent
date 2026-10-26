@@ -28,6 +28,7 @@ import { getPersona } from './personaService.js';
 import { buildEnrichedContext } from './contextEnricher.js';
 import { replySegmented } from '../utils/delay.js';
 import { buildFunctionTool } from '../utils/toolCalling.js';
+import { ensureArray } from '../utils/helpers.js';
 import db from './db.js';
 import config from '../config/config.js';
 import logger from '../utils/logger.js';
@@ -142,7 +143,15 @@ function checkReadStatus(jid, history = []) {
 // ─── User Profile ─────────────────────────────────────────────────────────────
 
 function getUserProfile(jid) {
-  return db.findOne(PROFILE_COL, { jid }) ?? null;
+  const p = db.findOne(PROFILE_COL, { jid });
+  if (!p) return null;
+  return {
+    ...p,
+    hobbies: ensureArray(p.hobbies),
+    topics: ensureArray(p.topics),
+    goals: ensureArray(p.goals),
+    sensitive: ensureArray(p.sensitive),
+  };
 }
 
 /**
@@ -213,7 +222,14 @@ Gunakan fungsi yang tersedia untuk melaporkan hasil. Kosongkan field (string kos
       return;
     }
 
-    await db.upsert(PROFILE_COL, { jid }, { ...result.args, jid, updatedAt: new Date().toISOString() });
+    const cleanArgs = { ...result.args };
+    for (const field of ['hobbies', 'topics', 'goals', 'sensitive']) {
+      if (field in cleanArgs) {
+        cleanArgs[field] = ensureArray(cleanArgs[field]);
+      }
+    }
+
+    await db.upsert(PROFILE_COL, { jid }, { ...cleanArgs, jid, updatedAt: new Date().toISOString() });
     logger.info({ jid }, '👤 botBrain: profil user diperbarui');
   } catch (err) {
     logger.warn({ jid, err: err.message }, '⚠️ botBrain: gagal perbarui profil');
@@ -228,10 +244,14 @@ function formatProfileForPrompt(jid) {
   if (p.personality) lines.push(`Kepribadian: ${p.personality}`);
   if (p.mood)        lines.push(`Mood terakhir: ${p.mood}`);
   if (p.language)    lines.push(`Gaya bahasa: ${p.language}`);
-  if (p.hobbies?.length)   lines.push(`Hobi: ${p.hobbies.join(', ')}`);
-  if (p.topics?.length)    lines.push(`Topik favorit: ${p.topics.join(', ')}`);
-  if (p.goals?.length)     lines.push(`Tujuan/rencana: ${p.goals.join(', ')}`);
-  if (p.sensitive?.length) lines.push(`Hal sensitif (hindari): ${p.sensitive.join(', ')}`);
+  const hobbies = ensureArray(p.hobbies);
+  if (hobbies.length)   lines.push(`Hobi: ${hobbies.join(', ')}`);
+  const topics = ensureArray(p.topics);
+  if (topics.length)    lines.push(`Topik favorit: ${topics.join(', ')}`);
+  const goals = ensureArray(p.goals);
+  if (goals.length)     lines.push(`Tujuan/rencana: ${goals.join(', ')}`);
+  const sensitive = ensureArray(p.sensitive);
+  if (sensitive.length) lines.push(`Hal sensitif (hindari): ${sensitive.join(', ')}`);
   if (p.summary)    lines.push(`\nRingkasan: ${p.summary}`);
   return lines.join('\n');
 }
@@ -623,9 +643,15 @@ async function thinkAndActForJid(jid) {
   // ── Eksekusi: perbarui profil parsial dari keputusan Qwen ─────────
   if (decision.profileUpdates && Object.keys(decision.profileUpdates).length > 0) {
     const existing = getUserProfile(jid) ?? {};
+    const cleanUpdates = { ...decision.profileUpdates };
+    for (const field of ['hobbies', 'topics', 'goals', 'sensitive']) {
+      if (field in cleanUpdates) {
+        cleanUpdates[field] = ensureArray(cleanUpdates[field]);
+      }
+    }
     await db.upsert(PROFILE_COL, { jid }, {
       ...existing,
-      ...decision.profileUpdates,
+      ...cleanUpdates,
       jid,
       updatedAt: new Date().toISOString(),
     });
