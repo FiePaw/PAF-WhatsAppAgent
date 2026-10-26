@@ -3,6 +3,27 @@
 Semua perubahan penting pada project ini didokumentasikan di file ini.  
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [6.9.0] — 2026-10-26
+
+**Integrasi Fitur Baru MyLMS (Telkom Scraper) & Pembaruan Format API MyCalendar & MyFinance**
+
+- **Integrasi MyLMS Telkom University**:
+  - `services/lmsClient.js`: Klien REST API ke FastAPI LMS Telkom scraper (`http://127.0.0.1:8000`). Menyediakan fungsi `getHealth()`, `refresh()`, `getPendingTasks()`, `getTimeline()`, dan `getNotifications()`, lengkap dengan format WhatsApp text view (WIB time).
+  - `plugins/lms.js`: Command plugin (`!lms`, `!tugas`, `!kuis`) untuk melihat status, daftar tugas pending, kuis pending, timeline, notifikasi, dan trigger sinkronisasi (`!lms refresh`).
+  - `plugins/triggered/lms.js`: Triggered plugin (intent natural via function calling) yang secara otomatis merespons pertanyaan bahasa natural tentang tugas, kuis, deadline, notifikasi, dan refresh LMS.
+  - `plugins/scheduled/lmsReminder.js`: Scheduled cron plugin (`@every_30m` pada 07:00–22:00 WIB) yang memantau deadline tugas & kuis mendesak (< 24 jam atau overdue) dengan de-duplikasi state harian di `data/lmsReminderState.json`.
+- **Pembaruan Format API MyCalendar**:
+  - `services/calendarClient.js`: Mengubah default IP API ke VPS (`http://20.239.192.10:9570`). Melengkapi seluruh endpoint REST: CRUD Events (`getEvent`, `updateEvent`), CRUD Courses (`listCourses`, `createCourse`, `getCourse`, `updateCourse`, `deleteCourse`), Course Exceptions (`setCourseException`, `deleteCourseException`), pemantauan status berita ekonomi (`getNewsStatus`, `verifyNews`), dan settings.
+  - `plugins/triggered/calendar.js`: Menambahkan dukungan ekstraksi AI dan eksekusi Course Exceptions (kuliah libur/batal, kuliah pengganti/reschedule, dan jadwal ujian UTS/UAS) melalui obrolan natural dengan konfirmasi aman `!ya`/`!tidak`.
+  - `plugins/calendar.js`: Menambahkan sub-command `!kuliah libur <nama mata kuliah> [tanggal]` untuk menandai sesi perkuliahan libur secara cepat.
+- **Pembaruan Format API MyFinance (FinTrack)**:
+  - `services/finTrackClient.js`: Menambahkan fungsi `getSummary()` (`GET /ext/summary`) untuk efisiensi pengambilan data agregat. Menghapus field `budgets` dari `FIELDS` (Opsi B: nonaktifkan budget sesuai arahan pengguna dan format API FinTrack terbaru).
+  - `plugins/triggered/myFinance.js`: Menghapus action `addBudget`, `updateBudget`, `deleteBudget` dari skema dan resource update, serta mengarahkan pesan informatif bahwa FinTrack kini menggunakan AI auto-categorization.
+- **Konfigurasi**:
+  - `config/config.js` & `.env`: Menambahkan konfigurasi `lms` (`LMS_API_URL`, `LMS_API_KEY`).
+
+---
+
 ## [6.8.4] — 2026-10-26
 
 **Optimalisasi Mode Berpikir: Default "fast" untuk Qwen & "auto" untuk Semua Backend DeepSeek**

@@ -61,7 +61,6 @@ export async function ft(method, path, body = null, { timeoutMs = TIMEOUT_MS } =
 // Field yang dikirim ke FinTrack per resource (sesuai payload POST yang sudah ada).
 const FIELDS = {
   transactions: ['type', 'amount', 'category', 'date', 'description'],
-  budgets: ['category', 'limit'],
   bills: ['name', 'amount', 'due_day', 'category', 'autodebit', 'notes'],
   investments: ['code', 'name', 'shares', 'buy_price', 'buy_date', 'notes'],
 };
@@ -72,6 +71,7 @@ function pick(obj, keys) {
   return out;
 }
 
+export const getSummary = () => ft('GET', '/ext/summary');
 export const list = (resource) => ft('GET', `/ext/${resource}`);
 export const create = (resource, data) => ft('POST', `/ext/${resource}`, pick(data, FIELDS[resource]));
 export const remove = (resource, id) => ft('DELETE', `/ext/${resource}/${id}`);

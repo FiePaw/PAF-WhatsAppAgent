@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { ft, FinTrackError } from '../../services/finTrackClient.js';
+import { getSummary, FinTrackError } from '../../services/finTrackClient.js';
 import { billsDueIn, budgetStatus, buildReport, formatRp, resolvePeriod } from '../../services/finTrackReport.js';
 import { dateLabel, todayStr, wibParts } from '../../services/calendarFormat.js';
 import { getGroupOutput } from '../../services/groupService.js';
@@ -129,7 +129,7 @@ async function tick() {
 
     let summary;
     try {
-      summary = await ft('GET', '/ext/summary');
+      summary = await getSummary();
     } catch (err) {
       // FinTrack/PC offline: lewati siklus; jangan berisik
       if (!(err instanceof FinTrackError && err.status === 0)) logger.warn({ err: err.message }, '⚠️ finReminder: gagal ambil summary');

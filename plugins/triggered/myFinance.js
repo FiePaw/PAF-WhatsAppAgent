@@ -31,13 +31,6 @@ const RES = {
     fields: { type: 'Jenis', amount: 'Nominal', category: 'Kategori', date: 'Tanggal', description: 'Keterangan' },
     fmt: { amount: formatRp, type: (v) => (v === 'income' ? 'Pemasukan' : 'Pengeluaran') },
   },
-  budgets: {
-    label: 'Anggaran',
-    match: (x, k) => has(x.category, k),
-    describe: (x) => `${x.category} — limit ${formatRp(x.limit)}/bulan`,
-    fields: { category: 'Kategori', limit: 'Limit' },
-    fmt: { limit: formatRp },
-  },
   bills: {
     label: 'Tagihan',
     match: (x, k) => has(x.name, k) || has(x.category, k),
@@ -72,9 +65,6 @@ function buildPatch(resource, p) {
     if (given(p.category)) patch.category = String(p.category).trim();
     if (given(p.date)) { if (isValidDate(p.date)) patch.date = p.date; else errors.push('Tanggal harus format YYYY-MM-DD yang valid.'); }
     if (p.description !== undefined && p.description !== null) patch.description = String(p.description).trim();
-  } else if (resource === 'budgets') {
-    if (given(p.amount)) { const n = positive(p.amount, 'Limit'); if (n !== undefined) patch.limit = n; }
-    if (given(p.newName)) patch.category = String(p.newName).trim();
   } else if (resource === 'bills') {
     if (given(p.newName)) patch.name = String(p.newName).trim();
     if (given(p.amount)) { const n = positive(p.amount, 'Nominal'); if (n !== undefined) patch.amount = n; }
@@ -241,8 +231,8 @@ async function doScanReceipt({ attachments, text, sender, reply }) {
 
   let categories = [];
   try {
-    const [tx, budgets] = await Promise.all([list('transactions'), list('budgets')]);
-    categories = [...new Set([...(budgets || []), ...(tx || [])].map((x) => x.category).filter(Boolean))].slice(0, 30);
+    const tx = await list('transactions').catch(() => []);
+    categories = [...new Set((tx || []).map((x) => x.category).filter(Boolean))].slice(0, 30);
   } catch { /* kategori hanya pelengkap */ }
 
   const caption = String(text || '').replace(/\[gambar dikirim\]/g, '').trim();
@@ -271,7 +261,7 @@ async function doScanReceipt({ attachments, text, sender, reply }) {
 export default {
   intent: 'myFinance',
 
-  intentDefinition: `"myFinance" - owner ingin mengelola keuangan pribadi via FinTrack. Pilih SATU action: addTransaction (catat SATU transaksi), addTransactions (catat BEBERAPA transaksi sekaligus dari satu pesan, isi items), addBudget/addBill/addInvestment (tambah anggaran/tagihan rutin/saham), updateTransaction/updateBudget/updateBill/updateInvestment (UBAH data yang sudah ada, mis. "ubah kopi tadi jadi 25rb", "limit anggaran makan jadi 600rb"; searchKeyword = data yang dimaksud, field lain = nilai baru), deleteTransaction/deleteBudget/deleteBill/deleteInvestment (hapus), getSummary (laporan/ringkasan keuangan; isi period: today, yesterday, this_week, last_week, last_7_days, this_month, last_month, this_year, atau custom dengan date_from/date_to; kosongkan = bulan ini), scanReceipt (owner mengirim FOTO struk/bukti transfer/bukti belanja untuk dicatat), confirmDelete (owner menyebut angka/nomor sebagai pilihan dari daftar hasil pencarian hapus ATAU ubah sebelumnya — lihat riwayat percakapan).`,
+  intentDefinition: `"myFinance" - owner ingin mengelola keuangan pribadi via FinTrack. Pilih SATU action: addTransaction (catat SATU transaksi), addTransactions (catat BEBERAPA transaksi sekaligus dari satu pesan, isi items), addBill/addInvestment (tambah tagihan rutin/saham), updateTransaction/updateBill/updateInvestment (UBAH data yang sudah ada, mis. "ubah kopi tadi jadi 25rb", "ubah tagihan wifi jadi 350rb"; searchKeyword = data yang dimaksud, field lain = nilai baru), deleteTransaction/deleteBill/deleteInvestment (hapus), getSummary (laporan/ringkasan keuangan; isi period: today, yesterday, this_week, last_week, last_7_days, this_month, last_month, this_year, atau custom dengan date_from/date_to; kosongkan = bulan ini), scanReceipt (owner mengirim FOTO struk/bukti transfer/bukti belanja untuk dicatat), confirmDelete (owner menyebut angka/nomor sebagai pilihan dari daftar hasil pencarian hapus ATAU ubah sebelumnya — lihat riwayat percakapan).`,
 
   // ─── Parameters (JSON Schema, format function-calling §9 API_USAGE.md) ─
   // Catatan: hanya `action` yang wajib di level schema — field lain OPSIONAL
@@ -285,7 +275,6 @@ export default {
         type: 'string',
         enum: [
           'addTransaction', 'addTransactions', 'updateTransaction', 'deleteTransaction',
-          'addBudget', 'updateBudget', 'deleteBudget',
           'addBill', 'updateBill', 'deleteBill',
           'addInvestment', 'updateInvestment', 'deleteInvestment',
           'getSummary', 'scanReceipt', 'confirmDelete',
@@ -293,14 +282,14 @@ export default {
         description: 'Jenis operasi keuangan yang diminta owner',
       },
       type: { type: 'string', enum: ['income', 'expense'], description: 'Untuk addTransaction; juga nilai baru jenis transaksi untuk updateTransaction' },
-      amount: { type: 'number', description: 'Nominal dalam Rupiah — untuk addTransaction, addBudget, addBill, addInvestment (harga beli per lembar); pada update* = nominal/limit BARU' },
-      category: { type: 'string', description: 'Kategori transaksi/anggaran/tagihan; pada updateTransaction/updateBill = kategori BARU; pada getSummary = filter kategori (opsional)' },
+      amount: { type: 'number', description: 'Nominal dalam Rupiah — untuk addTransaction, addBill, addInvestment (harga beli per lembar); pada update* = nominal BARU' },
+      category: { type: 'string', description: 'Kategori transaksi/tagihan; pada updateTransaction/updateBill = kategori BARU; pada getSummary = filter kategori (opsional)' },
       date: { type: 'string', description: 'Format YYYY-MM-DD, kosongkan jika tidak disebut; pada updateTransaction = tanggal BARU' },
       description: { type: 'string', description: 'Keterangan transaksi — untuk addTransaction; pada updateTransaction = keterangan BARU' },
       searchKeyword: { type: 'string', description: 'Kata kunci nama/deskripsi untuk mencari item — untuk delete* dan update*. Untuk updateTransaction kosongkan jika owner bilang "yang tadi/terakhir"' },
       confirmIndex: { type: 'integer', description: 'Angka pilihan yang dipilih owner saat konfirmasi hapus/ubah — untuk confirmDelete' },
       name: { type: 'string', description: 'Nama tagihan — untuk addBill' },
-      newName: { type: 'string', description: 'Nama/kategori BARU saat rename — untuk updateBudget (kategori) dan updateBill (nama)' },
+      newName: { type: 'string', description: 'Nama BARU saat rename — untuk updateBill (nama)' },
       due_day: { type: 'integer', minimum: 1, maximum: 31, description: 'Tanggal jatuh tempo 1-31 — untuk addBill, updateBill' },
       autodebit: { type: 'boolean', description: 'Apakah auto-debit — untuk addBill, updateBill' },
       notes: { type: 'string', description: 'Catatan — untuk addBill, addInvestment, updateBill, updateInvestment' },
@@ -489,65 +478,9 @@ export default {
         return;
       }
 
-      // ── addBudget ──────────────────────────────────────────────────────────
-      if (action === 'addBudget') {
-        const { category, amount } = params;
-        if (!category || !amount) {
-          await reply('⚠️ Sebutkan kategori dan nominal anggaran.');
-          return;
-        }
-
-        const budget = await ft('POST', '/ext/budgets', {
-          category,
-          limit: Number(amount),
-        });
-
-        await reply(
-          `✅ *Anggaran ditambahkan!*\n` +
-          `📂 ${budget.category}\n` +
-          `🎯 Limit: ${formatRp(budget.limit)}/bulan`
-        );
-        return;
-      }
-
-      // ── deleteBudget ───────────────────────────────────────────────────────
-      if (action === 'deleteBudget') {
-        const { searchKeyword } = params;
-        if (!searchKeyword) {
-          await reply('⚠️ Sebutkan kategori anggaran yang ingin dihapus.');
-          return;
-        }
-
-        const budgets = await ft('GET', '/ext/budgets');
-        const keyword = searchKeyword.toLowerCase();
-        const matches = budgets.filter(b => b.category?.toLowerCase().includes(keyword));
-
-        if (matches.length === 0) {
-          await reply(`❌ Tidak ada anggaran untuk kategori "*${searchKeyword}*".`);
-          return;
-        }
-
-        if (matches.length === 1) {
-          await ft('DELETE', `/ext/budgets/${matches[0].id}`);
-          await reply(`🗑️ Anggaran *${matches[0].category}* (${formatRp(matches[0].limit)}/bln) dihapus.`);
-          return;
-        }
-
-        pendingConfirm.set(sender, {
-          endpoint: '/ext/budgets',
-          candidates: matches.map(b => ({
-            id: b.id,
-            label: `${b.category} — limit ${formatRp(b.limit)}/bln`,
-          })),
-          expiresAt: Date.now() + 2 * 60 * 1000,
-        });
-
-        let msg = `🔍 Ditemukan *${matches.length}* anggaran. Pilih yang mana?\n\n`;
-        matches.forEach((b, i) => {
-          msg += `*${i + 1}.* ${b.category} — limit ${formatRp(b.limit)}/bln\n`;
-        });
-        msg += `\nBalas dengan angka pilihanmu (berlaku 2 menit).`;
-        await reply(msg);
+      // ── addBudget / deleteBudget (Deprecated di FinTrack baru) ───────────
+      if (action === 'addBudget' || action === 'deleteBudget' || action === 'updateBudget') {
+        await reply('ℹ️ Fitur kelola anggaran (budgets) tidak lagi aktif di FinTrack versi saat ini. FinTrack sekarang menggunakan AI auto-categorization.');
         return;
       }
 
@@ -693,7 +626,7 @@ export default {
       }
 
       // ── update* (ubah data yang sudah ada) ─────────────────────────────────
-      const updateResources = { updateTransaction: 'transactions', updateBudget: 'budgets', updateBill: 'bills', updateInvestment: 'investments' };
+      const updateResources = { updateTransaction: 'transactions', updateBill: 'bills', updateInvestment: 'investments' };
       if (updateResources[action]) {
         await doUpdate({ resource: updateResources[action], params, sender, reply });
         return;

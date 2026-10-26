@@ -19,11 +19,15 @@ async function extract(userText) {
     `Sekarang: ${nowLabel()} (zona Asia/Jakarta).\n` +
     `Pesan pengguna: """${userText}"""\n\n` +
     'Ekstrak menjadi JSON dengan bentuk persis:\n' +
-    '{"action":"create|query|update|delete|other","title":"judul atau null","date":"YYYY-MM-DD atau null",' +
-    '"time":"HH:MM 24 jam atau null","duration_min":angka atau null,"location":"teks atau null",' +
-    '"query_from":"YYYY-MM-DD atau null","query_to":"YYYY-MM-DD atau null"}\n' +
+    '{"action":"create|query|cancel_course|reschedule_course|exam_course|update|delete|other",' +
+    '"title":"judul acara/ujian atau null","course_name":"nama mata kuliah jika terkait perkuliahan atau null",' +
+    '"date":"YYYY-MM-DD atau null","time":"HH:MM 24 jam atau null","duration_min":angka atau null,"location":"teks atau null",' +
+    '"new_date":"YYYY-MM-DD atau null","new_time":"HH:MM 24 jam atau null","new_room":"ruang pengganti atau null",' +
+    '"note":"alasan/catatan atau null","query_from":"YYYY-MM-DD atau null","query_to":"YYYY-MM-DD atau null"}\n' +
     'Aturan: waktu dalam WIB; selesaikan tanggal relatif ("besok", "Jumat depan") memakai waktu sekarang di atas; ' +
-    '"create" = menambah acara baru; "query" = bertanya agenda/jadwal/kuliah (isi query_from dan query_to); ' +
+    '"create" = menambah acara/agenda non-kuliah baru; "query" = bertanya agenda/jadwal/kuliah (isi query_from dan query_to); ' +
+    '"cancel_course" = kuliah libur/ditiadakan di tanggal tertentu; "reschedule_course" = kuliah dipindah/ganti hari/jam; ' +
+    '"exam_course" = ujian kuliah (UTS/UAS) di tanggal tertentu; ' +
     'time null bila jam tidak disebut; jangan mengarang nilai yang tidak disebut pengguna.';
   try {
     const raw = await askAI({ jid: EXTRACT_JID, userText: prompt, systemPrompt: SYSTEM_PROMPT, thinkMode: 'fast' });
@@ -81,9 +85,80 @@ async function doCreate(p, sender, reply) {
   await reply(`📝 Tambah jadwal:\n🗓️ ${title}\n📅 ${when}${p.location ? `\n📍 ${p.location}` : ''}${warn ? `\n${warn}` : ''}\n\nSimpan? Balas *!ya* atau *!tidak* (berlaku 5 menit).`);
 }
 
+async function doCourseException(p, sender, reply) {
+  const keyword = (p.course_name || p.title || '').trim().toLowerCase();
+  const date = isValidDate(p.date) ? p.date : todayStr();
+  if (!keyword) {
+    await reply('⚠️ Sebutkan nama mata kuliah yang dimaksud. Contoh: "kuliah kalkulus senin depan libur".');
+    return;
+  }
+  let courses = [];
+  try {
+    courses = await cal.listCourses();
+  } catch (err) {
+    await reply(friendly(err));
+    return;
+  }
+  const hits = (courses || []).filter((c) =>
+    (c.name && c.name.toLowerCase().includes(keyword)) || (c.code && c.code.toLowerCase().includes(keyword))
+  );
+  if (!hits.length) {
+    const listNames = (courses || []).map((c) => `• ${c.name}`).join('\n');
+    await reply(`❌ Mata kuliah "*${keyword}*" tidak ditemukan di MyCalendar.\n\nMata kuliah terdaftar:\n${listNames || '(kosong)'}`);
+    return;
+  }
+  const course = hits[0];
+
+  let desc = '';
+  let payload = {};
+
+  if (p.action === 'reschedule_course') {
+    const newDate = isValidDate(p.new_date) ? p.new_date : date;
+    const newStart = isValidTime(p.new_time) ? p.new_time : (p.time || course.start_time);
+    payload = {
+      type: 'reschedule',
+      new_date: newDate,
+      new_start: newStart,
+      new_room: p.new_room || p.location || course.room || '',
+      note: p.note || 'Kuliah pengganti',
+    };
+    desc = `🔄 *Pindah Jadwal Kuliah*: ${course.name}\n📅 Tanggal asli: ${dateLabel(date)}\n➡️ Jadwal baru: ${dateLabel(newDate)} jam ${newStart} WIB${payload.new_room ? ` (${payload.new_room})` : ''}\n📝 Catatan: ${payload.note}`;
+  } else if (p.action === 'exam_course') {
+    payload = {
+      type: 'exam',
+      label: p.title || `Ujian ${course.name}`,
+      new_date: date,
+      new_start: isValidTime(p.time) ? p.time : course.start_time,
+      new_room: p.location || course.room || '',
+      note: p.note || 'Ujian',
+    };
+    desc = `📝 *Jadwal Ujian*: ${course.name}\n🏷️ ${payload.label}\n📅 Tanggal: ${dateLabel(date)} jam ${payload.new_start} WIB\n📍 Ruang: ${payload.new_room || '-'}`;
+  } else {
+    // cancel_course
+    payload = {
+      type: 'cancel',
+      note: p.note || 'Dosen berhalangan / libur',
+    };
+    desc = `🚫 *Tandai Kuliah Libur / Batal*:\n📚 ${course.name}\n📅 Tanggal: ${dateLabel(date)}\n📝 Alasan: ${payload.note}`;
+  }
+
+  setPending(sender, {
+    kind: 'course_exception',
+    courseId: course.id,
+    date,
+    payload,
+    run: async (r) => {
+      await cal.setCourseException(course.id, date, payload);
+      await r(`✅ Pengecualian kuliah berhasil disimpan:\n${desc}`);
+    },
+  });
+
+  await reply(`${desc}\n\nSimpan pengecualian ini? Balas *!ya* atau *!tidak* (berlaku 5 menit).`);
+}
+
 export default {
   intent: 'calendar',
-  intentDefinition: '"calendar" - owner membahas jadwal pribadinya: menambah acara/rapat/janji dengan tanggal atau hari tertentu, atau menanyakan agenda/jadwal/kuliah pada hari tertentu (contoh: "tambah rapat dosen Jumat jam 10", "besok ada kuliah apa?", "agenda minggu ini"). Ekstrak: request (string, isi permintaan owner apa adanya). Bukan untuk pengingat berbasis menit ("ingatkan 10 menit lagi" itu urusan !remind) dan bukan untuk mengirim pesan ke orang lain.',
+  intentDefinition: '"calendar" - owner membahas jadwal pribadinya: menambah acara/rapat/janji dengan tanggal tertentu, menanyakan agenda/jadwal/kuliah, atau menandai pengecualian kuliah seperti kuliah libur/batal, kuliah pengganti (reschedule), atau ujian (UTS/UAS) (contoh: "tambah rapat dosen Jumat jam 10", "besok ada kuliah apa?", "kuliah kalkulus senin depan libur", "uts basis data rabu jam 8"). Ekstrak: request (string, isi permintaan owner apa adanya).',
   parameters: {
     type: 'object',
     properties: {
@@ -103,6 +178,9 @@ export default {
       const p = await extract(request);
       if (p.action === 'query') return await doQuery(p, reply);
       if (p.action === 'create') return await doCreate(p, sender, reply);
+      if (p.action === 'cancel_course' || p.action === 'reschedule_course' || p.action === 'exam_course') {
+        return await doCourseException(p, sender, reply);
+      }
       if (p.action === 'update' || p.action === 'delete') {
         return await reply('Mengubah/menghapus jadwal lewat kalimat belum didukung. Gunakan *!agenda hapus <id>* (id tampil di !jadwal) atau aplikasi web.');
       }

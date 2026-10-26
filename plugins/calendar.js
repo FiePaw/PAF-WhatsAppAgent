@@ -27,7 +27,35 @@ async function showAgenda(reply, arg) {
   await reply(formatAgenda(occs, from, to));
 }
 
-async function showCourses(reply) {
+async function showCourses(reply, args = []) {
+  if (args[0]?.toLowerCase() === 'libur') {
+    const full = args.slice(1).join(' ').trim();
+    if (!full) {
+      await reply('❓ Format: !kuliah libur <nama mata kuliah> [YYYY-MM-DD]\nContoh: !kuliah libur kalkulus 2026-10-28');
+      return;
+    }
+    const words = full.split(/\s+/);
+    let date = todayStr();
+    let courseName = full;
+    const lastWord = words[words.length - 1];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(lastWord)) {
+      date = lastWord;
+      courseName = words.slice(0, -1).join(' ');
+    }
+    const courses = await cal.listCourses();
+    const hits = (courses || []).filter((c) =>
+      (c.name && c.name.toLowerCase().includes(courseName.toLowerCase())) ||
+      (c.code && c.code.toLowerCase().includes(courseName.toLowerCase()))
+    );
+    if (!hits.length) {
+      await reply(`❌ Mata kuliah "${courseName}" tidak ditemukan di MyCalendar.`);
+      return;
+    }
+    const c = hits[0];
+    await cal.setCourseException(c.id, date, { type: 'cancel', note: 'Libur via command !kuliah libur' });
+    await reply(`✅ Sesi perkuliahan *${c.name}* pada tanggal *${date}* berhasil ditandai LIBUR.`);
+    return;
+  }
   const today = todayStr();
   const to = addDays(today, 1);
   const occs = (await cal.getAgenda(today, to, false)).filter((o) => o.source_type === 'course');
@@ -96,7 +124,7 @@ export default {
           else await showAgenda(reply, fullArgs);
           break;
         case 'kuliah':
-          await showCourses(reply);
+          await showCourses(reply, args);
           break;
         case 'berita':
           await showNews(reply, fullArgs);

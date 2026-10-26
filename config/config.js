@@ -39,6 +39,13 @@ const config = {
     timeout: 3000000,
   },
 
+  // ─── LMS Telkom Scraper API ──────────────────────────────────────────────
+  lms: {
+    baseUrl: process.env.LMS_API_URL || 'http://127.0.0.1:8000',
+    apiKey: process.env.LMS_API_KEY || '',
+    timeout: 30000,
+  },
+
   // ─── Presence & Read Receipt ──────────────────────────────────────────────
   // true  → bot tampil "Online" saat terhubung
   markOnline: process.env.MARK_ONLINE !== 'false',
