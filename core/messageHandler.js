@@ -11,6 +11,7 @@ import { recordMessage, getHistory } from '../services/chatHistoryService.js';
 import { extractSocialMediaUrl, downloadSocialMedia } from '../services/socialMediaService.js';
 import approvalStore from '../services/approvalStore.js';
 import { buildFunctionTool } from '../utils/toolCalling.js';
+import { acquireSessionLock, releaseSessionLock } from '../services/sessionQueueService.js';
 import logger from '../utils/logger.js';
 
 /**
@@ -715,16 +716,25 @@ export async function handleMessage(sock, msg, plugins) {
     const { prompt: systemPrompt } = getPersona(sender, owner);
     const ownerContextHints = computeContextHints(sender, intentText);
 
-    await runIntentAndChat({
-      ctx,
-      chatFn: () => askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, contextHints: ownerContextHints }),
-      sendChat: async (segments) => {
-        const fullText = segments.map((s) => s.text).join(' ');
-        await replySegmented(sock, jid, segments, msg);
-        recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});
-      },
-      onChatError: () => reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.'),
-    });
+    // Kunci sesi sebelum memproses agar laporan background (BotBrain, triggered plugin)
+    // tidak menembak sesi yang sama secara bersamaan → mencegah race condition di PAF-Model.
+    // Lock key menggunakan `sender` (bukan `jid`) karena sesi chat owner berbasis sender JID.
+    acquireSessionLock(sender);
+    try {
+      await runIntentAndChat({
+        ctx,
+        chatFn: () => askAISegmented({ jid: sender, userText: intentText, systemPrompt, attachments, contextHints: ownerContextHints }),
+        sendChat: async (segments) => {
+          const fullText = segments.map((s) => s.text).join(' ');
+          await replySegmented(sock, jid, segments, msg);
+          recordMessage({ jid, role: 'bot', text: fullText, sender: 'bot' }).catch(() => {});
+        },
+        onChatError: () => reply('❌ Maaf, terjadi kesalahan. Coba lagi nanti.'),
+      });
+    } finally {
+      // Selalu lepas kunci — juga memicu flush antrean laporan yang tertampung
+      await releaseSessionLock(sender);
+    }
     return;
   }
 

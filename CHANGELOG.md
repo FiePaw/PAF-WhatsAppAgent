@@ -3,6 +3,26 @@
 Semua perubahan penting pada project ini didokumentasikan di file ini.  
 Format mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [6.10.0] — 2026-10-26
+
+**Ephemeral Batch Consolidation & Chat Session Concurrency Lock**
+
+- **`services/sessionQueueService.js`** _(baru)_: Modul baru yang menjadi pusat kendali lock sesi chat dan buffer laporan background.
+  - `acquireSessionLock(jid)` / `releaseSessionLock(jid)`: Tandai kapan sesi chat JID sedang aktif memproses giliran user. `releaseSessionLock` secara otomatis men-trigger flush antrean laporan yang tertampung.
+  - `reportToChatSession({ jid, reportText, source, systemPrompt })`: Titik masuk tunggal untuk semua laporan background (BotBrain, triggered plugin). Jika sesi IDLE → inject langsung; jika sesi BUSY → tampung ke buffer.
+  - `flushPendingReports(jid)`: Memproses buffer saat lock dilepas. Jika ada 1 laporan → inject langsung; jika >1 laporan → konsolidasi via sesi Qwen sementara (`forceNew: true`) lalu hapus sesi sementara tersebut → hanya 1 turn yang masuk ke sesi utama.
+  - `_consolidateWithEphemeralSession(jid, reports)`: Membuat sesi sementara terisolasi, merangkum semua laporan menjadi 1 narasi ringkas, lalu menghapus sesi dari server PAF-Model (`DELETE /v1/sessions/{id}`) di blok `finally`.
+  - Proteksi buffer penuh: jika antrian ≥ `MAX_QUEUE_SIZE` (10), flush paksa dipicu secara background agar tidak terjadi memory leak.
+- **`core/messageHandler.js`**: Menambahkan import `acquireSessionLock` / `releaseSessionLock` dari `sessionQueueService`. Membungkus `runIntentAndChat` pada alur owner DM dengan `acquireSessionLock(sender)` sebelum dan `releaseSessionLock(sender)` di blok `finally` — menggunakan `sender` JID (kunci sesi chat owner) bukan `jid` (kunci chat room).
+- **`services/botBrain.js`**: Import `reportToChatSession` dari `sessionQueueService`. Mengganti pemanggilan langsung `await askAI({ jid, userText: contextMsg, systemPrompt })` (baris ~729) dengan `await reportToChatSession({ jid, reportText: contextMsg, source: 'botBrain', systemPrompt })`.
+- **`core/Triggeredpluginhandler.js`**: Import `reportToChatSession` dari `sessionQueueService`. Mengganti pemanggilan langsung `askAI(...)` (fire-and-forget untuk inject hasil plugin ke chat session) dengan `reportToChatSession({ jid, reportText: systemContext, source: 'intent:<name>' })`.
+
+**Masalah yang diselesaikan:**
+1. _Race condition_ — dua request HTTP ke `X-Session-ID` yang sama secara bersamaan (user chat + BotBrain report) menyebabkan tab browser PAF-Model bentrok → 504 Gateway Timeout / 429 Too Many Requests.
+2. _Turn pollution_ — beberapa laporan sistem masuk berturut-turut ke sesi chat menghabiskan context window dan memicu latensi tidak perlu.
+
+---
+
 ## [6.9.0] — 2026-10-26
 
 **Integrasi Fitur Baru MyLMS (Telkom Scraper) & Pembaruan Format API MyCalendar & MyFinance**

@@ -24,6 +24,7 @@ import cronService from './cronService.js';
 import { getActiveJids, getAllKnownJids, getHistory, pruneAllOldMessages, recordMessage } from './chatHistoryService.js';
 import { getPresence, subscribePresence, subscribeAll } from './presenceService.js';
 import { askAI, askAISegmented, askAITool, parseSegments } from './aiService.js';
+import { reportToChatSession } from './sessionQueueService.js';
 import { getPersona } from './personaService.js';
 import { buildEnrichedContext } from './contextEnricher.js';
 import { replySegmented } from '../utils/delay.js';
@@ -726,9 +727,14 @@ async function thinkAndActForJid(jid) {
         '',
         '[INSTRUKSI KHUSUS UNTUK LAPORAN INI: Ini catatan internal sistem, BUKAN pesan dari user — jangan dijelaskan atau dibahas. Balas HANYA dengan satu kata singkat seperti "noted" atau "ok".]',
       ].filter((l) => l !== null).join('\n');
-      await askAI({ jid, userText: contextMsg, systemPrompt });
+      await reportToChatSession({
+        jid,
+        reportText: contextMsg,
+        source: 'botBrain',
+        systemPrompt,
+      });
       if (reason) lastInjectedReason = reason;
-      logger.debug({ jid, reason: reason?.slice(0, 60) }, '📥 botBrain: laporan diinject ke session (dengan framing balasan minimal)');
+      logger.debug({ jid, reason: reason?.slice(0, 60) }, '📥 botBrain: laporan dikirim ke sessionQueueService (dengan framing balasan minimal)');
     } catch (err) {
       logger.warn({ jid, err: err.message }, '⚠️ botBrain: gagal inject konteks ke session');
     }

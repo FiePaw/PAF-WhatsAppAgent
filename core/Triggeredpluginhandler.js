@@ -35,6 +35,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { detectIntentWithSession } from '../services/intentSessionService.js';
 import { askAI } from '../services/aiService.js';
+import { reportToChatSession } from '../services/sessionQueueService.js';
 import { buildFunctionTool } from '../utils/toolCalling.js';
 import logger from '../utils/logger.js';
 
@@ -233,17 +234,19 @@ export async function executeTriggeredPlugin(ctx, detected) {
     return;
   }
 
-  // Inject hasil plugin ke chat session
+  // Inject hasil plugin ke chat session via sessionQueueService
+  // (bukan langsung ke askAI) agar tidak bentrok dengan pesan user yang mungkin
+  // sedang diproses di sesi yang sama (race condition di PAF-Model browser tab).
   if (capturedReply) {
     const systemContext = `[SYSTEM] Aksi intent "${intent}" telah dieksekusi. Hasilnya: ${capturedReply}`;
-    askAI({
+    reportToChatSession({
       jid,
-      userText: systemContext,
-      systemPrompt: null,
+      reportText: systemContext,
+      source: `intent:${intent}`,
     }).catch((err) => {
-      logger.warn({ intent, jid, err: err.message }, '⚠️ Gagal inject hasil plugin ke chat session');
+      logger.warn({ intent, jid, err: err.message }, '⚠️ Gagal kirim hasil plugin ke sessionQueueService');
     });
-    logger.debug({ intent, jid }, '📨 Hasil plugin di-inject ke chat session');
+    logger.debug({ intent, jid }, '📨 Hasil plugin diteruskan ke sessionQueueService');
   }
 }
 
